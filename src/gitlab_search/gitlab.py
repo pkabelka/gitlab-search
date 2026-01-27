@@ -57,7 +57,7 @@ class SearchResult:
 @dataclass
 class SearchCriteria:
     """Search criteria for GitLab search."""
-    term: str
+    search_query: str
     filename: str | None = None
     extension: str | None = None
     path: str | None = None
@@ -306,7 +306,7 @@ class GitLabClient:
         Returns:
             URL-encoded search query
         """
-        parts = [criteria.term]
+        parts = [criteria.search_query]
 
         if criteria.filename:
             parts.append(f"filename:{criteria.filename}")
@@ -475,8 +475,8 @@ class GitLabClient:
             if not fnmatch.fnmatch(path, f"*{criteria.path}*"):
                 return False
 
-        # Check term in filename
-        if criteria.term and criteria.term not in name:
+        # Check search_query in filename
+        if criteria.search_query and criteria.search_query not in name:
             return False
 
         return True
@@ -526,37 +526,37 @@ class GitLabClient:
         return [(p, r) for p, r in results if r]
 
     async def search_scope_in_project(
-        self, project: Project, scope: str, term: str
+        self, project: Project, scope: str, search_query: str
     ) -> tuple[Project, list[dict]]:
         """Search with a specific scope in a project.
 
         Args:
             project: Project to search in
             scope: Search scope (issues, merge_requests, etc.)
-            term: Search term
+            search_query: Search query
 
         Returns:
             Tuple of (project, raw results)
         """
-        url = f"{self.base_url}/projects/{project.id}/search?scope={scope}&search={quote(term)}"
+        url = f"{self.base_url}/projects/{project.id}/search?scope={scope}&search={quote(search_query)}"
         response = await self._request(url)
         response.raise_for_status()
         return project, response.json()
 
     async def search_scope_in_projects(
-        self, projects: list[Project], scope: str, term: str
+        self, projects: list[Project], scope: str, search_query: str
     ) -> list[tuple[Project, list[dict]]]:
         """Search with a specific scope in multiple projects.
 
         Args:
             projects: List of projects to search in
             scope: Search scope
-            term: Search term
+            search_query: Search query
 
         Returns:
             List of (project, results) tuples
         """
         results = await asyncio.gather(
-            *[self.search_scope_in_project(p, scope, term) for p in projects]
+            *[self.search_scope_in_project(p, scope, search_query) for p in projects]
         )
         return [(p, r) for p, r in results if r]

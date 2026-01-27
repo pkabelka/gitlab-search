@@ -224,7 +224,7 @@ async def run_search(args: argparse.Namespace) -> None:
     printer = ResultPrinter(ColorFormatter(args.color))
 
     criteria = SearchCriteria(
-        term=args.search_query,
+        search_query=args.search_query,
         filename=args.filename,
         extension=args.extension,
         path=args.path,
@@ -246,13 +246,13 @@ async def run_search(args: argparse.Namespace) -> None:
         for scope in args.scope:
             if scope == "blobs":
                 results = await client.search_blobs_in_projects(projects, criteria)
-                printer.print_blob_results(criteria.term, results)
+                printer.print_blob_results(criteria.search_query, results)
             elif scope == "files":
                 results = await client.search_filenames_in_projects(projects, criteria)
                 printer.print_file_results(results)
             else:
-                results = await client.search_scope_in_projects(projects, scope, criteria.term)
-                printer.print_scope_results(scope, criteria.term, results)
+                results = await client.search_scope_in_projects(projects, scope, criteria.search_query)
+                printer.print_scope_results(scope, criteria.search_query, results)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
