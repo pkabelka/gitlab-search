@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gitlab-search"
+version = "0.1.0"
+description = "Command line search in GitLab repositories"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.13"
+keywords = ["GitLab"]
+authors = [
+    { name = "Petr Kabelka" },
+]
+dependencies = [
+    "requests",
+]
+
+[project.scripts]
+gitlab-search = "gitlab_search.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitlab_search"]
