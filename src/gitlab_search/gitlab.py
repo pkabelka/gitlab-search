@@ -163,7 +163,7 @@ class GitLabClient:
 
         Args:
             groups: List of groups to fetch projects from
-            archive: Archive filter - "all", "only", or "exclude"
+            archived_filter: Archive filter - "all", "only", or "exclude"
 
         Returns:
             List of Project objects
