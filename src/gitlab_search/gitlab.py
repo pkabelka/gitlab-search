@@ -1,15 +1,36 @@
 """GitLab API client with async support."""
 
 import asyncio
+import json
 import logging
+import ssl
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import quote
-
-import requests
 
 from .config import Config
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class Response:
+    """HTTP response wrapper."""
+    status: int
+    headers: dict[str, str]
+    body: bytes
+
+    def raise_for_status(self) -> None:
+        """Raise an exception if the response status indicates an error."""
+        if self.status >= 400:
+            raise urllib.error.HTTPError(
+                url="", code=self.status, msg=f"HTTP {self.status}", hdrs={}, fp=None
+            )
+
+    def json(self) -> Any:
+        """Parse response body as JSON."""
+        return json.loads(self.body.decode("utf-8"))
 
 @dataclass
 class Group:
@@ -41,7 +62,7 @@ class SearchCriteria:
     extension: str | None = None
     path: str | None = None
 
-def get_next_pagination_url(response: requests.Response) -> str | None:
+def get_next_pagination_url(response: Response) -> str | None:
     """Extract next page URL from Link header.
 
     GitLab uses Link header for pagination:
@@ -81,9 +102,16 @@ class GitLabClient:
         self.base_url = config.api_url.rstrip("/")
         self.headers = {"PRIVATE-TOKEN": config.token}
         self.verify_cert = not config.ignore_cert
+        self.ssl_context: ssl.SSLContext | None = None
+        if not self.verify_cert:
+            self.ssl_context = ssl.create_default_context()
+            self.ssl_context.check_hostname = False
+            self.ssl_context.verify_mode = ssl.CERT_NONE
+            logger.debug('Certificate will not be verified')
+        logger.debug('Certificate verification enabled: %s', str(self.verify_cert))
         self.semaphore = asyncio.Semaphore(config.max_requests)
 
-    def _request_sync(self, url: str) -> requests.Response:
+    def _request_sync(self, url: str) -> Response:
         """Make synchronous HTTP GET request.
 
         Args:
@@ -93,9 +121,15 @@ class GitLabClient:
             Response object
         """
         logger.debug("Requesting: GET %s", url)
-        return requests.get(url, headers=self.headers, verify=self.verify_cert)
+        request = urllib.request.Request(url, headers=self.headers)
+        with urllib.request.urlopen(request, context=self.ssl_context) as resp:
+            return Response(
+                status=resp.status,
+                headers=dict(resp.headers),
+                body=resp.read(),
+            )
 
-    async def _request(self, url: str) -> requests.Response:
+    async def _request(self, url: str) -> Response:
         """Make async HTTP GET request with concurrent request limit.
 
         Args:

@@ -13,9 +13,7 @@ keywords = ["GitLab"]
 authors = [
     { name = "Petr Kabelka" },
 ]
-dependencies = [
-    "requests",
-]
+dependencies = []
 
 [project.scripts]
 gitlab-search = "gitlab_search.cli:main"
