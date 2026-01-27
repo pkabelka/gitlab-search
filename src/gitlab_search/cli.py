@@ -32,7 +32,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     # Search arguments
     parser.add_argument(
         "search_query",
-        metavar="KEYWORD",
+        metavar="QUERY",
         nargs="?",
         help="GitLab search query",
     )
