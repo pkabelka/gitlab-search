@@ -62,6 +62,59 @@ class SearchCriteria:
     extension: str | None = None
     path: str | None = None
 
+@dataclass
+class FileResult:
+    """File search result (filename search via repository tree)."""
+    path: str
+    name: str
+    type: str
+
+@dataclass
+class IssueResult:
+    """Issue search result."""
+    iid: int
+    title: str
+    state: str
+    web_url: str
+
+@dataclass
+class MergeRequestResult:
+    """Merge request search result."""
+    iid: int
+    title: str
+    state: str
+    web_url: str
+
+@dataclass
+class MilestoneResult:
+    """Milestone search result."""
+    iid: int
+    title: str
+    state: str
+    web_url: str
+
+@dataclass
+class WikiResult:
+    """Wiki blob search result."""
+    path: str
+    data: str
+    slug: str
+
+@dataclass
+class CommitResult:
+    """Commit search result."""
+    short_id: str
+    title: str
+    message: str
+    web_url: str
+
+@dataclass
+class NoteResult:
+    """Note/comment search result."""
+    body: str
+    noteable_type: str
+    noteable_iid: int | None
+
 def get_next_pagination_url(response: Response) -> str | None:
     """Extract next page URL from Link header.
 
@@ -91,6 +144,22 @@ def get_next_pagination_url(response: Response) -> str | None:
 
 class GitLabClient:
     """Async GitLab API client."""
+
+    @staticmethod
+    def _get_archived_query_param(archived_filter: str) -> str:
+        """Get query parameter for archived filter.
+
+        Args:
+            archived_filter: Archive filter - "all"/"include", "only", or "exclude"
+
+        Returns:
+            Query parameter string (empty, "&archived=true", or "&archived=false")
+        """
+        if archived_filter == "only":
+            return "&archived=true"
+        elif archived_filter == "exclude":
+            return "&archived=false"
+        return ""
 
     def __init__(self, config: Config) -> None:
         """Initialize GitLab client.
@@ -202,14 +271,8 @@ class GitLabClient:
         Returns:
             List of Project objects
         """
-        archived_query_param = ""
-        if archived_filter == "only":
-            archived_query_param = "&archived=true"
-        elif archived_filter == "exclude":
-            archived_query_param = "&archived=false"
-
         async def fetch_group_projects(group: Group) -> list[dict]:
-            url = f"/groups/{group.id}/projects?per_page=100{archived_query_param}"
+            url = f"/groups/{group.id}/projects?per_page=100{self._get_archived_query_param(archived_filter)}"
             return await self._paginated_request(url)
 
         # Fetch all group projects concurrently
@@ -254,14 +317,14 @@ class GitLabClient:
 
         return quote(" ".join(parts))
 
-    async def search_in_project(
+    async def search_blobs_in_project(
         self, project: Project, criteria: SearchCriteria
     ) -> tuple[Project, list[SearchResult]]:
-        """Search for content in a single project.
+        """Search for blob content in a single project.
 
         Args:
             project: Project to search in
-            criteria: Search criteria
+            criteria: Search criteria with optional filename/extension/path filters
 
         Returns:
             Tuple of (project, search results)
@@ -284,22 +347,216 @@ class GitLabClient:
 
         return project, results
 
-    async def search_in_projects(
+    async def search_blobs_in_projects(
         self, projects: list[Project], criteria: SearchCriteria
     ) -> list[tuple[Project, list[SearchResult]]]:
-        """Search for content in multiple projects.
+        """Search for blob content in multiple projects.
 
         Args:
             projects: List of projects to search in
-            criteria: Search criteria
+            criteria: Search criteria with optional filename/extension/path filters
 
         Returns:
             List of (project, search results) tuples, filtered to only
             include projects with results
         """
         results = await asyncio.gather(
-            *[self.search_in_project(p, criteria) for p in projects]
+            *[self.search_blobs_in_project(p, criteria) for p in projects]
         )
 
         # Filter to only include projects with results
+        return [(p, r) for p, r in results if r]
+
+    async def fetch_user_projects(
+        self, user: str, archived_filter: str = "include"
+    ) -> list[Project]:
+        """Fetch projects owned by a user.
+
+        Args:
+            user: Username or user ID
+            archived_filter: Archive filter - "include", "only", or "exclude"
+
+        Returns:
+            List of Project objects
+        """
+        url = f"/users/{user}/projects?per_page=100{self._get_archived_query_param(archived_filter)}"
+        data = await self._paginated_request(url)
+
+        projects = [
+            Project(
+                id=p["id"],
+                name=p["name"],
+                web_url=p["web_url"],
+                archived=p["archived"],
+            )
+            for p in data
+        ]
+
+        logger.debug("Using user projects: %s", ", ".join(p.name for p in projects))
+        return projects
+
+    async def fetch_my_projects(self, archived_filter: str = "include") -> list[Project]:
+        """Fetch projects the current user is a member of.
+
+        Args:
+            archived_filter: Archive filter - "include", "only", or "exclude"
+
+        Returns:
+            List of Project objects
+        """
+        url = f"/projects?membership=true&per_page=100{self._get_archived_query_param(archived_filter)}"
+        data = await self._paginated_request(url)
+
+        projects = [
+            Project(
+                id=p["id"],
+                name=p["name"],
+                web_url=p["web_url"],
+                archived=p["archived"],
+            )
+            for p in data
+        ]
+
+        logger.debug("Using my projects: %s", ", ".join(p.name for p in projects))
+        return projects
+
+    async def fetch_projects_by_ids(self, project_ids: list[str]) -> list[Project]:
+        """Fetch specific projects by ID or path.
+
+        Args:
+            project_ids: List of project IDs or paths
+
+        Returns:
+            List of Project objects
+        """
+        async def fetch_project(project_id: str) -> Project:
+            url = f"/projects/{quote(project_id, safe='')}"
+            response = await self._request(f"{self.base_url}{url}")
+            response.raise_for_status()
+            p = response.json()
+            return Project(
+                id=p["id"],
+                name=p["name"],
+                web_url=p["web_url"],
+                archived=p["archived"],
+            )
+
+        projects = await asyncio.gather(*[fetch_project(pid) for pid in project_ids])
+        logger.debug("Using projects: %s", ", ".join(p.name for p in projects))
+        return list(projects)
+
+    def _matches_file_criteria(self, file: dict, criteria: SearchCriteria) -> bool:
+        """Check if a file matches the search criteria.
+
+        Args:
+            file: File dict from repository tree API
+            criteria: Search criteria with filename/extension/path patterns
+
+        Returns:
+            True if file matches criteria
+        """
+        import fnmatch
+
+        name = file.get("name", "")
+        path = file.get("path", "")
+
+        # Check filename pattern (supports wildcards)
+        if criteria.filename:
+            if not fnmatch.fnmatch(name, criteria.filename):
+                return False
+
+        # Check extension
+        if criteria.extension:
+            if not name.endswith(f".{criteria.extension}"):
+                return False
+
+        # Check path pattern
+        if criteria.path:
+            if not fnmatch.fnmatch(path, f"*{criteria.path}*"):
+                return False
+
+        # Check term in filename
+        if criteria.term and criteria.term not in name:
+            return False
+
+        return True
+
+    async def search_filenames_in_project(
+        self, project: Project, criteria: SearchCriteria, ref: str = "HEAD"
+    ) -> tuple[Project, list[FileResult]]:
+        """Search for files by name using repository tree API.
+
+        Args:
+            project: Project to search in
+            criteria: Search criteria with filename/extension/path patterns
+            ref: Git ref (branch/tag) to search in
+
+        Returns:
+            Tuple of (project, matching files)
+        """
+        url = f"/projects/{project.id}/repository/tree?recursive=true&per_page=100&ref={ref}"
+        try:
+            all_files = await self._paginated_request(url)
+        except urllib.error.HTTPError:
+            return project, []
+
+        matching = [
+            FileResult(path=f["path"], name=f["name"], type=f["type"])
+            for f in all_files
+            if f["type"] == "blob" and self._matches_file_criteria(f, criteria)
+        ]
+
+        return project, matching
+
+    async def search_filenames_in_projects(
+        self, projects: list[Project], criteria: SearchCriteria
+    ) -> list[tuple[Project, list[FileResult]]]:
+        """Search for files by name in multiple projects.
+
+        Args:
+            projects: List of projects to search in
+            criteria: Search criteria
+
+        Returns:
+            List of (project, file results) tuples
+        """
+        results = await asyncio.gather(
+            *[self.search_filenames_in_project(p, criteria) for p in projects]
+        )
+        return [(p, r) for p, r in results if r]
+
+    async def search_scope_in_project(
+        self, project: Project, scope: str, term: str
+    ) -> tuple[Project, list[dict]]:
+        """Search with a specific scope in a project.
+
+        Args:
+            project: Project to search in
+            scope: Search scope (issues, merge_requests, etc.)
+            term: Search term
+
+        Returns:
+            Tuple of (project, raw results)
+        """
+        url = f"{self.base_url}/projects/{project.id}/search?scope={scope}&search={quote(term)}"
+        response = await self._request(url)
+        response.raise_for_status()
+        return project, response.json()
+
+    async def search_scope_in_projects(
+        self, projects: list[Project], scope: str, term: str
+    ) -> list[tuple[Project, list[dict]]]:
+        """Search with a specific scope in multiple projects.
+
+        Args:
+            projects: List of projects to search in
+            scope: Search scope
+            term: Search term
+
+        Returns:
+            List of (project, results) tuples
+        """
+        results = await asyncio.gather(
+            *[self.search_scope_in_project(p, scope, term) for p in projects]
+        )
         return [(p, r) for p, r in results if r]

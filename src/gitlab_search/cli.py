@@ -16,6 +16,31 @@ from .gitlab import GitLabClient, SearchCriteria
 from .output import ColorFormatter, ResultPrinter
 
 PROGRAM_NAME = "gitlab-search"
+VALID_SCOPES = [
+    "blobs", "files", "issues", "merge_requests",
+    "milestones", "wiki_blobs", "commits", "notes"
+]
+
+def parse_scopes(scope_arg: str) -> list[str]:
+    """Parse and validate comma-separated scopes.
+
+    Args:
+        scope_arg: Comma-separated scope string
+
+    Returns:
+        List of valid scope names
+
+    Raises:
+        argparse.ArgumentTypeError: If any scope is invalid
+    """
+    scopes = [s.strip() for s in scope_arg.split(",")]
+    invalid = set(scopes) - set(VALID_SCOPES)
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            f"invalid choice(s): {', '.join(sorted(invalid))} "
+            f"(choose from {', '.join(VALID_SCOPES)})"
+        )
+    return scopes
 
 def create_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -36,12 +61,44 @@ def create_argument_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="GitLab search query",
     )
-    parser.add_argument(
+
+    # Project source options (mutually exclusive)
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument(
         "-g",
         "--groups",
         metavar="GROUPS",
-        help="comma separated list of groups to search repositories in",
+        help="comma separated list of groups (name or numeric ID)",
     )
+    source_group.add_argument(
+        "-p",
+        "--projects",
+        metavar="PROJECTS",
+        help="comma separated list of projects (path or numeric ID)",
+    )
+    source_group.add_argument(
+        "-u",
+        "--user",
+        metavar="USER",
+        help="search in projects owned by this user (username or numeric ID)",
+    )
+    source_group.add_argument(
+        "--my-projects",
+        action="store_true",
+        help="search in your own projects",
+    )
+
+    # Search scope
+    parser.add_argument(
+        "-s",
+        "--scope",
+        metavar="SCOPES",
+        type=parse_scopes,
+        default="blobs",
+        help=f"comma-separated search scopes: {', '.join(sorted(VALID_SCOPES))} (default: %(default)s)",
+    )
+
+    # Search filters
     parser.add_argument(
         "-f",
         "--filename",
@@ -55,7 +112,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
         help="search content only in files with this extension",
     )
     parser.add_argument(
-        "-p",
+        "-P",
         "--path",
         metavar="FILE_PATH",
         help="search content only in files with the given path",
@@ -174,10 +231,28 @@ async def run_search(args: argparse.Namespace) -> None:
     )
 
     try:
-        groups = await client.fetch_groups(args.groups)
-        projects = await client.fetch_projects_in_groups(groups, args.archived)
-        results = await client.search_in_projects(projects, criteria)
-        printer.print_search_results(criteria.term, results)
+        # Determine project source
+        if args.projects:
+            projects = await client.fetch_projects_by_ids(args.projects.split(","))
+        elif args.user:
+            projects = await client.fetch_user_projects(args.user, args.archived)
+        elif args.my_projects:
+            projects = await client.fetch_my_projects(args.archived)
+        else:
+            groups = await client.fetch_groups(args.groups)
+            projects = await client.fetch_projects_in_groups(groups, args.archived)
+
+        # Perform search for each scope
+        for scope in args.scope:
+            if scope == "blobs":
+                results = await client.search_blobs_in_projects(projects, criteria)
+                printer.print_blob_results(criteria.term, results)
+            elif scope == "files":
+                results = await client.search_filenames_in_projects(projects, criteria)
+                printer.print_file_results(results)
+            else:
+                results = await client.search_scope_in_projects(projects, scope, criteria.term)
+                printer.print_scope_results(scope, criteria.term, results)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -203,11 +278,11 @@ def main() -> None:
 
     if args.setup:
         run_setup(args)
-    elif args.search_query:
-        asyncio.run(run_search(args))
-    else:
+    elif not args.search_query and args.scope != ['files']:
         parser.print_help()
         sys.exit(1)
+    else:
+        asyncio.run(run_search(args))
 
 if __name__ == "__main__":
     main()

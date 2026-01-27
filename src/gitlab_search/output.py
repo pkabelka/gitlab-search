@@ -3,7 +3,7 @@
 import re
 import sys
 
-from .gitlab import Project, SearchResult
+from .gitlab import FileResult, Project, SearchResult
 
 class ColorFormatter:
     """Handles colored terminal output with configurable color mode."""
@@ -79,6 +79,32 @@ def indent_preview(preview: str) -> str:
     """
     return preview.replace("\n", "\n\t\t")
 
+def extract_snippet(text: str, term: str, context_chars: int = 100) -> str | None:
+    """Extract snippet around first occurrence of term.
+
+    Args:
+        text: Full text to search in
+        term: Search term to find
+        context_chars: Characters to show before/after match
+
+    Returns:
+        Snippet with ellipsis if truncated, or None if term not found
+    """
+    match = re.search(re.escape(term), text, re.IGNORECASE)
+    if not match:
+        return None
+
+    start = max(0, match.start() - context_chars)
+    end = min(len(text), match.end() + context_chars)
+
+    snippet = text[start:end]
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(text):
+        snippet = snippet + "..."
+
+    return snippet
+
 class ResultPrinter:
     """Prints search results with optional color formatting."""
 
@@ -107,17 +133,23 @@ class ResultPrinter:
         pattern = re.compile(f"({escaped_term})", re.IGNORECASE)
         return pattern.sub(lambda m: self.fmt.red(m.group(1)), data)
 
-    def print_search_results(
+    def _print_project_header(self, project: Project) -> None:
+        """Print project header with archived indicator if needed."""
+        archived_info = ""
+        if project.archived:
+            archived_info = self.fmt.bold(self.fmt.red(" (archived)"))
+        print(f"{self.fmt.bold(self.fmt.green(project.name))}{archived_info}:")
+
+    def print_blob_results(
         self, term: str, results: list[tuple[Project, list[SearchResult]]]
     ) -> None:
-        """Print search results with formatting.
+        """Print blob search results with formatting.
 
         Args:
             term: The search term used
             results: List of (project, search results) tuples
         """
         for project, search_results in results:
-            # Format each result
             formatted_results = ""
             for result in search_results:
                 url = url_to_line(project, result)
@@ -127,14 +159,70 @@ class ResultPrinter:
                 formatted_results += (
                     f"\n\t{self.fmt.underline(url)}\n\n\t\t{highlighted_data}"
                 )
-
-            # Add archived indicator if needed
-            archived_info = ""
-            if project.archived:
-                archived_info = self.fmt.bold(self.fmt.red(" (archived)"))
-
-            print(f"{self.fmt.bold(self.fmt.green(project.name))}{archived_info}:")
+            self._print_project_header(project)
             print(formatted_results)
+
+    def print_file_results(
+        self, results: list[tuple[Project, list[FileResult]]]
+    ) -> None:
+        """Print filename search results.
+
+        Args:
+            results: List of (project, file results) tuples
+        """
+        for project, file_results in results:
+            self._print_project_header(project)
+            for result in file_results:
+                url = f"{project.web_url}/-/blob/HEAD/{result.path}"
+                print(f"\t{self.fmt.underline(url)}")
+
+    def print_scope_results(
+        self, scope: str, term: str, results: list[tuple[Project, list[dict]]]
+    ) -> None:
+        """Print generic scope search results.
+
+        Args:
+            scope: The search scope (issues, merge_requests, etc.)
+            term: The search term used
+            results: List of (project, raw results) tuples
+        """
+        for project, scope_results in results:
+            self._print_project_header(project)
+            for result in scope_results:
+                if scope in ("issues", "merge_requests", "milestones"):
+                    iid = result.get("iid", "")
+                    title = result.get("title", "")
+                    state = result.get("state", "")
+                    web_url = result.get("web_url", "")
+                    description = result.get("description", "") or ""
+
+                    print(f"\n\t{self.fmt.underline(web_url)}")
+                    highlighted_title = self.highlight_term(term, title)
+                    print(f"\t#{iid} [{state}] {highlighted_title}")
+
+                    snippet = extract_snippet(description, term)
+                    if snippet:
+                        highlighted_snippet = self.highlight_term(term, indent_preview(snippet))
+                        print(f"\t\t{highlighted_snippet}")
+                elif scope == "wiki_blobs":
+                    slug = result.get("slug", "")
+                    data = result.get("data", "")
+                    url = f"{project.web_url}/-/wikis/{slug}"
+                    highlighted = self.highlight_term(term, indent_preview(data))
+                    print(f"\t{self.fmt.underline(url)}\n\n\t\t{highlighted}")
+                elif scope == "commits":
+                    short_id = result.get("short_id", "")
+                    title = result.get("title", "")
+                    web_url = result.get("web_url", "")
+                    print(f"\n\t{self.fmt.underline(web_url)}")
+                    print(f"\t{short_id} {title}")
+                elif scope == "notes":
+                    body = result.get("body", "")
+                    noteable_type = result.get("noteable_type", "")
+                    noteable_iid = result.get("noteable_iid", "")
+                    highlighted = self.highlight_term(term, indent_preview(body))
+                    print(f"\n\t{noteable_type} #{noteable_iid}")
+                    print(f"\t\t{highlighted}")
 
     def print_success(self, message: str) -> None:
         print(self.fmt.green(message))
