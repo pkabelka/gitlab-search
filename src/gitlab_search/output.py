@@ -174,7 +174,7 @@ class ResultPrinter:
             self._print_project_header(project)
             for result in file_results:
                 url = f"{project.web_url}/-/blob/HEAD/{result.path}"
-                print(f"\t{self.fmt.underline(url)}")
+                print(f"\t{url}")
 
     def print_scope_results(
         self, scope: str, search_query: str, results: list[tuple[Project, list[dict]]]

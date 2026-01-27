@@ -208,6 +208,7 @@ async def run_search(args: argparse.Namespace) -> None:
     Args:
         args: Parsed command-line arguments
     """
+    logger = logging.getLogger(__name__)
     config = load_config()
 
     # Apply CLI overrides
@@ -233,12 +234,17 @@ async def run_search(args: argparse.Namespace) -> None:
     try:
         # Determine project source
         if args.projects:
+            logger.debug("Fetching projects by IDs or names")
             projects = await client.fetch_projects_by_ids(args.projects.split(","))
         elif args.user:
+            logger.debug("Fetching projects of user: %s", args.user)
+            logger.debug("Archived projects: %s", args.archived)
             projects = await client.fetch_user_projects(args.user, args.archived)
         elif args.my_projects:
+            logger.debug("Fetching own user projects")
             projects = await client.fetch_my_projects(args.archived)
         else:
+            logger.debug("Fetching projects by available groups")
             groups = await client.fetch_groups(args.groups)
             projects = await client.fetch_projects_in_groups(groups, args.archived)
 
