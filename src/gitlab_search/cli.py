@@ -38,7 +38,7 @@ def parse_scopes(scope_arg: str) -> list[str]:
     if invalid:
         raise argparse.ArgumentTypeError(
             f"invalid choice(s): {', '.join(sorted(invalid))} "
-            f"(choose from {', '.join(VALID_SCOPES)})"
+            f"(choose from {', '.join(sorted(VALID_SCOPES))})"
         )
     return scopes
 
@@ -274,7 +274,6 @@ def configure_logging(debug: bool) -> None:
         level=level,
         format="%(levelname)s: %(message)s",
     )
-
 
 def main() -> None:
     parser = create_argument_parser()
