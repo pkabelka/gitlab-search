@@ -288,7 +288,10 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
     else:
-        asyncio.run(run_search(args))
+        try:
+            asyncio.run(run_search(args))
+        except KeyboardInterrupt:
+            print('Received interrupt, exiting')
 
 if __name__ == "__main__":
     main()
