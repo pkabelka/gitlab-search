@@ -55,6 +55,7 @@ class TokenizeResult:
     extension: str | None = None
     path: str | None = None
     archived: str = "include"
+    recursive: bool = False
     api_url: str | None = None
     ignore_cert: bool = False
     max_requests: int | None = None
@@ -187,6 +188,10 @@ def tokenize_args(args: list[str]) -> TokenizeResult:
                     f"--archived must be one of: include, only, exclude"
                 )
             result.archived = args[i]
+            pending_not = False
+
+        elif arg in ("-r", "--recursive"):
+            result.recursive = True
             pending_not = False
 
         elif arg == "--api-url":
@@ -409,6 +414,7 @@ def parse_command(args: list[str]) -> ParsedCommand:
         extension=result.extension,
         path=result.path,
         archived=result.archived,
+        recursive=result.recursive,
         api_url=result.api_url,
         ignore_cert=result.ignore_cert,
         max_requests=result.max_requests,

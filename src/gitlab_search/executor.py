@@ -19,12 +19,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ResultIdentifier:
-    """Unique identifier for a search result."""
+    """Unique identifier for a search result (file-level for AND logic)."""
 
     project_id: int
     filename: str
-    ref: str
-    startline: int
 
     @classmethod
     def from_result(cls, project: Project, result: SearchResult) -> "ResultIdentifier":
@@ -32,8 +30,6 @@ class ResultIdentifier:
         return cls(
             project_id=project.id,
             filename=result.filename,
-            ref=result.ref,
-            startline=result.startline,
         )
 
 
@@ -101,7 +97,12 @@ async def resolve_projects(
     # Fetch projects from groups
     if parsed.groups:
         groups = await client.fetch_groups(",".join(parsed.groups))
-        group_projects = await client.fetch_projects_in_groups(groups, parsed.archived)
+        group_projects = await client.fetch_projects_in_groups(
+            groups,
+            parsed.archived,
+            parsed.recursive,
+            parsed.exclude_groups if parsed.exclude_groups else None,
+        )
         for p in group_projects:
             if p.id not in seen_ids:
                 projects.append(p)
@@ -134,7 +135,12 @@ async def resolve_projects(
     # If nothing specified, fetch all groups
     if not parsed.groups and not parsed.projects and not parsed.user and not parsed.my_projects:
         groups = await client.fetch_groups(None)
-        all_projects = await client.fetch_projects_in_groups(groups, parsed.archived)
+        all_projects = await client.fetch_projects_in_groups(
+            groups,
+            parsed.archived,
+            parsed.recursive,
+            parsed.exclude_groups if parsed.exclude_groups else None,
+        )
         for p in all_projects:
             if p.id not in seen_ids:
                 projects.append(p)
@@ -183,7 +189,8 @@ async def execute_blob_search(
         return []
 
     # Execute all queries in parallel
-    query_results: dict[str, dict[ResultIdentifier, tuple[Project, SearchResult]]] = {}
+    # Maps query -> file identifier -> list of results for that file
+    query_results: dict[str, dict[ResultIdentifier, tuple[Project, list[SearchResult]]]] = {}
 
     async def search_query(query: str) -> tuple[str, list[tuple[Project, list[SearchResult]]]]:
         criteria = SearchCriteria(
@@ -199,13 +206,15 @@ async def execute_blob_search(
     query_tasks = [search_query(q) for q in all_queries]
     query_results_list = await asyncio.gather(*query_tasks)
 
-    # Build result mappings
+    # Build result mappings - collect all results per file
     for query, results in query_results_list:
         query_results[query] = {}
         for project, search_results in results:
             for result in search_results:
                 rid = ResultIdentifier.from_result(project, result)
-                query_results[query][rid] = (project, result)
+                if rid not in query_results[query]:
+                    query_results[query][rid] = (project, [])
+                query_results[query][rid][1].append(result)
 
     # Build ID sets for expression evaluation
     id_sets: dict[str, set[Any]] = {
@@ -227,13 +236,14 @@ async def execute_blob_search(
     project_results: dict[int, tuple[Project, list[SearchResult]]] = {}
 
     for query, results in query_results.items():
-        for rid, (project, result) in results.items():
+        for rid, (project, result_list) in results.items():
             if rid in matching_ids:
                 if project.id not in project_results:
                     project_results[project.id] = (project, [])
-                # Avoid duplicates
-                if result not in project_results[project.id][1]:
-                    project_results[project.id][1].append(result)
+                # Add all results for this file, avoiding duplicates
+                for result in result_list:
+                    if result not in project_results[project.id][1]:
+                        project_results[project.id][1].append(result)
 
     return list(project_results.values())
 
@@ -410,9 +420,6 @@ async def execute_search(
     all_queries = parsed.get_all_queries()
     expression = parsed.query_expression
 
-    # For single query without operators, simplify to use first query for highlighting
-    highlight_query = all_queries[0] if all_queries else ""
-
     # Perform search for each scope
     for scope in parsed.scope:
         if scope == "blobs":
@@ -429,7 +436,7 @@ async def execute_search(
             else:
                 # No query expression - shouldn't happen with required -q
                 results = []
-            printer.print_blob_results(highlight_query, results)
+            printer.print_blob_results(all_queries, results)
 
         elif scope == "files":
             if expression:
@@ -464,4 +471,4 @@ async def execute_search(
                 )
             else:
                 results = []
-            printer.print_scope_results(scope, highlight_query, results)
+            printer.print_scope_results(scope, all_queries, results)

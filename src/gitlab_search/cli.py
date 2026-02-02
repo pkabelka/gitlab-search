@@ -42,6 +42,7 @@ Project Source Options (can be combined):
   -p, --projects PROJS  Comma-separated list of projects (path or numeric ID)
   -u, --user USER       Search in projects owned by this user
   --my-projects         Search in projects you are a member of
+  -r, --recursive       Recursively search all subgroups under specified groups
 
   Use -not before -p or -g to exclude projects/groups:
     -g mygroup -not -p excluded_project
@@ -88,6 +89,12 @@ Examples:
 
   # Exclude a project from group search
   {PROGRAM_NAME} -g mygroup ! -p excluded_project -q "term"
+
+  # Recursively search all subgroups
+  {PROGRAM_NAME} -g parent_group -r -q "term"
+
+  # Exclude a subgroup from group search
+  {PROGRAM_NAME} -g parent_group -r ! -g parent_group/subgroup -q "term"
 
   # Combined AND and OR with grouping
   {PROGRAM_NAME} -p myproject \\( -q "a" -o -q "b" \\) -q "c"

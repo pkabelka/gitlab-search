@@ -79,23 +79,40 @@ def indent_preview(preview: str) -> str:
     """
     return preview.replace("\n", "\n\t\t")
 
-def extract_snippet(text: str, search_query: str, context_chars: int = 100) -> str | None:
-    """Extract snippet around first occurrence of search_query.
+def extract_snippet(text: str, search_queries: str | list[str], context_chars: int = 100) -> str | None:
+    """Extract snippet around first occurrence of any search query.
 
     Args:
         text: Full text to search in
-        search_query: Search query to find
+        search_queries: Search query or list of queries to find
         context_chars: Characters to show before/after match
 
     Returns:
-        Snippet with ellipsis if truncated, or None if search_query not found
+        Snippet with ellipsis if truncated, or None if no query found
     """
-    match = re.search(re.escape(search_query), text, re.IGNORECASE)
-    if not match:
+    if isinstance(search_queries, str):
+        queries = [search_queries]
+    else:
+        queries = search_queries
+
+    if not queries:
         return None
 
-    start = max(0, match.start() - context_chars)
-    end = min(len(text), match.end() + context_chars)
+    # Find the earliest match among all queries
+    earliest_match = None
+    for query in queries:
+        if not query:
+            continue
+        match = re.search(re.escape(query), text, re.IGNORECASE)
+        if match:
+            if earliest_match is None or match.start() < earliest_match.start():
+                earliest_match = match
+
+    if not earliest_match:
+        return None
+
+    start = max(0, earliest_match.start() - context_chars)
+    end = min(len(text), earliest_match.end() + context_chars)
 
     snippet = text[start:end]
     if start > 0:
@@ -116,22 +133,34 @@ class ResultPrinter:
         """
         self.fmt = formatter
 
-    def highlight_search_query(self, search_query: str, data: str) -> str:
-        """Highlight matched search_query in red.
+    def highlight_search_query(self, search_queries: str | list[str], data: str) -> str:
+        """Highlight matched search queries in red.
 
         Uses case-insensitive matching but preserves original case
         in the output.
 
         Args:
-            search_query: The search query to highlight
+            search_queries: Single query string or list of queries to highlight
             data: The text containing matches
 
         Returns:
-            Text with matched search query highlighted
+            Text with matched search queries highlighted
         """
-        escaped_search_query = re.escape(search_query)
-        pattern = re.compile(f"({escaped_search_query})", re.IGNORECASE)
-        return pattern.sub(lambda m: self.fmt.red(m.group(1)), data)
+        if isinstance(search_queries, str):
+            queries = [search_queries]
+        else:
+            queries = search_queries
+
+        if not queries:
+            return data
+
+        result = data
+        for query in queries:
+            if query:
+                escaped_query = re.escape(query)
+                pattern = re.compile(f"({escaped_query})", re.IGNORECASE)
+                result = pattern.sub(lambda m: self.fmt.red(m.group(1)), result)
+        return result
 
     def _print_project_header(self, project: Project) -> None:
         """Print project header with archived indicator if needed."""
@@ -141,12 +170,12 @@ class ResultPrinter:
         print(f"{self.fmt.bold(self.fmt.green(project.name))}{archived_info}:")
 
     def print_blob_results(
-        self, search_query: str, results: list[tuple[Project, list[SearchResult]]]
+        self, search_queries: str | list[str], results: list[tuple[Project, list[SearchResult]]]
     ) -> None:
         """Print blob search results with formatting.
 
         Args:
-            search_query: The search query used
+            search_queries: The search query/queries used
             results: List of (project, search results) tuples
         """
         for project, search_results in results:
@@ -154,7 +183,7 @@ class ResultPrinter:
             for result in search_results:
                 url = url_to_line(project, result)
                 highlighted_data = self.highlight_search_query(
-                    search_query, indent_preview(result.data)
+                    search_queries, indent_preview(result.data)
                 )
                 formatted_results += (
                     f"\n\t{self.fmt.underline(url)}\n\n\t\t{highlighted_data}"
@@ -177,13 +206,13 @@ class ResultPrinter:
                 print(f"\t{url}")
 
     def print_scope_results(
-        self, scope: str, search_query: str, results: list[tuple[Project, list[dict]]]
+        self, scope: str, search_queries: str | list[str], results: list[tuple[Project, list[dict]]]
     ) -> None:
         """Print generic scope search results.
 
         Args:
             scope: The search scope (issues, merge_requests, etc.)
-            search_query: The search query used
+            search_queries: The search query/queries used
             results: List of (project, raw results) tuples
         """
         for project, scope_results in results:
@@ -197,18 +226,18 @@ class ResultPrinter:
                     description = result.get("description", "") or ""
 
                     print(f"\n\t{self.fmt.underline(web_url)}")
-                    highlighted_title = self.highlight_search_query(search_query, title)
+                    highlighted_title = self.highlight_search_query(search_queries, title)
                     print(f"\t#{iid} [{state}] {highlighted_title}")
 
-                    snippet = extract_snippet(description, search_query)
+                    snippet = extract_snippet(description, search_queries)
                     if snippet:
-                        highlighted_snippet = self.highlight_search_query(search_query, indent_preview(snippet))
+                        highlighted_snippet = self.highlight_search_query(search_queries, indent_preview(snippet))
                         print(f"\t\t{highlighted_snippet}")
                 elif scope == "wiki_blobs":
                     slug = result.get("slug", "")
                     data = result.get("data", "")
                     url = f"{project.web_url}/-/wikis/{slug}"
-                    highlighted = self.highlight_search_query(search_query, indent_preview(data))
+                    highlighted = self.highlight_search_query(search_queries, indent_preview(data))
                     print(f"\t{self.fmt.underline(url)}\n\n\t\t{highlighted}")
                 elif scope == "commits":
                     short_id = result.get("short_id", "")
@@ -220,7 +249,7 @@ class ResultPrinter:
                     body = result.get("body", "")
                     noteable_type = result.get("noteable_type", "")
                     noteable_iid = result.get("noteable_iid", "")
-                    highlighted = self.highlight_search_query(search_query, indent_preview(body))
+                    highlighted = self.highlight_search_query(search_queries, indent_preview(body))
                     print(f"\n\t{noteable_type} #{noteable_iid}")
                     print(f"\t\t{highlighted}")
 

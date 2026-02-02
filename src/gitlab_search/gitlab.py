@@ -259,39 +259,103 @@ class GitLabClient:
 
         return groups
 
+    async def fetch_descendant_groups(self, group: Group) -> list[Group]:
+        """Fetch all descendant groups (subgroups at all levels) of a group.
+
+        Uses GitLab's /groups/:id/descendant_groups endpoint which returns
+        all descendants (subgroups, sub-subgroups, etc.) in one response.
+
+        Args:
+            group: Parent group to fetch descendants for
+
+        Returns:
+            List of all descendant Group objects
+        """
+        url = f"/groups/{group.id}/descendant_groups?per_page=100&all_available=true"
+        try:
+            data = await self._paginated_request(url)
+            descendants = [Group(id=str(g["id"]), name=g["full_path"]) for g in data]
+            logger.debug(
+                "Found %d descendant groups for %s: %s",
+                len(descendants),
+                group.name,
+                ", ".join(g.name for g in descendants),
+            )
+            return descendants
+        except Exception as e:
+            logger.warning("Failed to fetch descendant groups for %s: %s", group.name, e)
+            return []
+
     async def fetch_projects_in_groups(
-        self, groups: list[Group], archived_filter: str = "all"
+        self,
+        groups: list[Group],
+        archived_filter: str = "all",
+        recursive: bool = False,
+        exclude_groups: list[str] | None = None,
     ) -> list[Project]:
         """Fetch projects in the specified groups.
 
         Args:
             groups: List of groups to fetch projects from
             archived_filter: Archive filter - "all", "only", or "exclude"
+            recursive: If True, also fetch projects from all descendant subgroups
+            exclude_groups: List of group names/IDs to exclude from search
 
         Returns:
             List of Project objects
         """
+        all_groups = list(groups)
+
+        # If recursive, fetch all descendant groups first
+        if recursive:
+            descendant_results = await asyncio.gather(
+                *[self.fetch_descendant_groups(g) for g in groups]
+            )
+            for descendants in descendant_results:
+                all_groups.extend(descendants)
+            logger.debug(
+                "Total groups after recursive expansion: %d",
+                len(all_groups),
+            )
+
+        # Filter out excluded groups
+        if exclude_groups:
+            exclude_set = set(exclude_groups)
+            original_count = len(all_groups)
+            all_groups = [
+                g for g in all_groups
+                if g.id not in exclude_set and g.name not in exclude_set
+            ]
+            logger.debug(
+                "Excluded %d groups, %d remaining",
+                original_count - len(all_groups),
+                len(all_groups),
+            )
+
         async def fetch_group_projects(group: Group) -> list[dict]:
             url = f"/groups/{group.id}/projects?per_page=100{self._get_archived_query_param(archived_filter)}"
             return await self._paginated_request(url)
 
         # Fetch all group projects concurrently
         results = await asyncio.gather(
-            *[fetch_group_projects(g) for g in groups]
+            *[fetch_group_projects(g) for g in all_groups]
         )
 
-        # Flatten results
+        # Flatten results and deduplicate by project ID
+        seen_ids: set[int] = set()
         all_projects: list[Project] = []
         for project_list in results:
             for p in project_list:
-                all_projects.append(
-                    Project(
-                        id=p["id"],
-                        name=p["name"],
-                        web_url=p["web_url"],
-                        archived=p["archived"],
+                if p["id"] not in seen_ids:
+                    seen_ids.add(p["id"])
+                    all_projects.append(
+                        Project(
+                            id=p["id"],
+                            name=p["name"],
+                            web_url=p["web_url"],
+                            archived=p["archived"],
+                        )
                     )
-                )
 
         logger.debug("Using projects: %s", ", ".join(p.name for p in all_projects))
 

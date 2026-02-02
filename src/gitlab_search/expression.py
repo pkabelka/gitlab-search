@@ -152,6 +152,7 @@ class ParsedCommand:
     extension: str | None = None
     path: str | None = None
     archived: str = "include"
+    recursive: bool = False
 
     # Connection options
     api_url: str | None = None

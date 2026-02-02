@@ -139,6 +139,24 @@ class TestTokenizeArgs(unittest.TestCase):
 
         self.assertEqual(result.archived, "exclude")
 
+    def test_recursive_short_flag(self):
+        """Test -r recursive flag in tokenizer."""
+        result = tokenize_args(["-g", "grp", "-r", "-q", "x"])
+
+        self.assertTrue(result.recursive)
+
+    def test_recursive_long_flag(self):
+        """Test --recursive flag in tokenizer."""
+        result = tokenize_args(["-g", "grp", "--recursive", "-q", "x"])
+
+        self.assertTrue(result.recursive)
+
+    def test_recursive_default_false(self):
+        """Test recursive is False by default in tokenizer."""
+        result = tokenize_args(["-g", "grp", "-q", "x"])
+
+        self.assertFalse(result.recursive)
+
     def test_missing_query_argument(self):
         """Test error on missing -q argument."""
         with self.assertRaises(ParseError) as ctx:
@@ -381,6 +399,33 @@ class TestParseCommand(unittest.TestCase):
 
         self.assertTrue(parsed.setup)
         self.assertEqual(parsed.token, "mytoken")
+
+    def test_recursive_short_flag(self):
+        """Test -r recursive flag."""
+        parsed = parse_command(["-g", "mygroup", "-r", "-q", "term"])
+
+        self.assertEqual(parsed.groups, ["mygroup"])
+        self.assertTrue(parsed.recursive)
+
+    def test_recursive_long_flag(self):
+        """Test --recursive flag."""
+        parsed = parse_command(["-g", "mygroup", "--recursive", "-q", "term"])
+
+        self.assertEqual(parsed.groups, ["mygroup"])
+        self.assertTrue(parsed.recursive)
+
+    def test_recursive_default_false(self):
+        """Test recursive is False by default."""
+        parsed = parse_command(["-g", "mygroup", "-q", "term"])
+
+        self.assertFalse(parsed.recursive)
+
+    def test_recursive_with_multiple_groups(self):
+        """Test recursive with multiple groups."""
+        parsed = parse_command(["-g", "grp1,grp2", "-r", "-q", "term"])
+
+        self.assertEqual(parsed.groups, ["grp1", "grp2"])
+        self.assertTrue(parsed.recursive)
 
 
 if __name__ == "__main__":
