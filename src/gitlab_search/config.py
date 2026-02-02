@@ -64,7 +64,7 @@ def load_config() -> Config:
 
 def write_config(
     directory: str,
-    token: str,
+    token: str | None = None,
     api_url: str = DEFAULT_API_URL,
     ignore_cert: bool = False,
     max_requests: int = DEFAULT_MAX_REQUESTS,

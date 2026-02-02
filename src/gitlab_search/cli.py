@@ -1,6 +1,5 @@
 """Command-line interface for gitlab-search."""
 
-import argparse
 import asyncio
 import logging
 import sys
@@ -12,8 +11,11 @@ from .config import (
     load_config,
     write_config,
 )
-from .gitlab import GitLabClient, SearchCriteria
+from .executor import execute_search
+from .gitlab import GitLabClient
 from .output import ColorFormatter, ResultPrinter
+from .parser import ParseError, parse_command
+from .expression import ParsedCommand
 
 PROGRAM_NAME = "gitlab-search"
 VALID_SCOPES = [
@@ -21,247 +23,147 @@ VALID_SCOPES = [
     "milestones", "wiki_blobs", "commits", "notes"
 ]
 
-def parse_scopes(scope_arg: str) -> list[str]:
-    """Parse and validate comma-separated scopes.
+
+def print_help() -> None:
+    """Print help message."""
+    print(f"""Usage: {PROGRAM_NAME} [OPTIONS] -q QUERY [-q QUERY ...]
+
+Search for file contents in GitLab repositories using find-like expression syntax.
+
+Query Options:
+  -q QUERY              Search query (required, can be repeated)
+  -a                    AND operator (implicit between -q flags)
+  -o                    OR operator
+  -not, !               NOT operator (negation)
+  ( )                   Grouping (use \\( \\) in shell)
+
+Project Source Options (can be combined):
+  -g, --groups GROUPS   Comma-separated list of groups (name or numeric ID)
+  -p, --projects PROJS  Comma-separated list of projects (path or numeric ID)
+  -u, --user USER       Search in projects owned by this user
+  --my-projects         Search in projects you are a member of
+
+  Use -not before -p or -g to exclude projects/groups:
+    -g mygroup -not -p excluded_project
+
+Search Scope:
+  -s, --scope SCOPES    Comma-separated search scopes (default: blobs)
+                        Choices: {', '.join(sorted(VALID_SCOPES))}
+
+Search Filters:
+  -f, --filename FILE   Search only in files matching this pattern
+  -e, --extension EXT   Search only in files with this extension
+  -P, --path PATH       Search only in files with this path
+
+Archive Filter:
+  --archived MODE       Filter archived projects: include, only, exclude
+                        (default: include)
+
+Connection Options:
+  --api-url URL         GitLab API base URL (default: {DEFAULT_API_URL})
+  --ignore-cert         Ignore API certificate errors
+  --max-requests N      Max concurrent requests (default: {DEFAULT_MAX_REQUESTS})
+  --token TOKEN         GitLab personal access token
+
+Setup:
+  --setup               Store options in configuration file
+  --dir DIR             Configuration file directory (default: .)
+
+Other:
+  --color MODE          Colorize output: auto, always, never (default: auto)
+  --debug               Enable debug logging
+  -V, --version         Show version and exit
+  -h, --help            Show this help and exit
+
+Examples:
+  # Simple search
+  {PROGRAM_NAME} -p myproject -q "search term"
+
+  # Search with AND (files must contain both terms)
+  {PROGRAM_NAME} -p myproject -q "term1" -q "term2"
+  {PROGRAM_NAME} -p myproject -q "term1" -a -q "term2"
+
+  # Search with OR (files containing either term)
+  {PROGRAM_NAME} -p myproject -q "term1" -o -q "term2"
+
+  # Exclude a project from group search
+  {PROGRAM_NAME} -g mygroup ! -p excluded_project -q "term"
+
+  # Combined AND and OR with grouping
+  {PROGRAM_NAME} -p myproject \\( -q "a" -o -q "b" \\) -q "c"
+""")
+
+
+def print_version() -> None:
+    """Print version."""
+    print(f"{PROGRAM_NAME} {version(PROGRAM_NAME)}")
+
+
+def validate_scopes(scopes: list[str]) -> None:
+    """Validate search scopes.
 
     Args:
-        scope_arg: Comma-separated scope string
-
-    Returns:
-        List of valid scope names
+        scopes: List of scope names
 
     Raises:
-        argparse.ArgumentTypeError: If any scope is invalid
+        ParseError: If any scope is invalid
     """
-    scopes = [s.strip() for s in scope_arg.split(",")]
     invalid = set(scopes) - set(VALID_SCOPES)
     if invalid:
-        raise argparse.ArgumentTypeError(
-            f"invalid choice(s): {', '.join(sorted(invalid))} "
+        raise ParseError(
+            f"invalid scope(s): {', '.join(sorted(invalid))} "
             f"(choose from {', '.join(sorted(VALID_SCOPES))})"
         )
-    return scopes
 
-def create_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=PROGRAM_NAME,
-        description="Search for file contents in GitLab repositories.",
-    )
-    parser.add_argument(
-        "-V",
-        "--version",
-        action="version",
-        version=f"%(prog)s {version(PROGRAM_NAME)}",
-    )
 
-    # Search arguments
-    parser.add_argument(
-        "search_query",
-        metavar="QUERY",
-        nargs="?",
-        help="GitLab search query",
-    )
-
-    # Project source options (mutually exclusive)
-    source_group = parser.add_mutually_exclusive_group()
-    source_group.add_argument(
-        "-g",
-        "--groups",
-        metavar="GROUPS",
-        help="comma separated list of groups (name or numeric ID)",
-    )
-    source_group.add_argument(
-        "-p",
-        "--projects",
-        metavar="PROJECTS",
-        help="comma separated list of projects (path or numeric ID)",
-    )
-    source_group.add_argument(
-        "-u",
-        "--user",
-        metavar="USER",
-        help="search in projects owned by this user (username or numeric ID)",
-    )
-    source_group.add_argument(
-        "--my-projects",
-        action="store_true",
-        help="search in your own projects",
-    )
-
-    # Search scope
-    parser.add_argument(
-        "-s",
-        "--scope",
-        metavar="SCOPES",
-        type=parse_scopes,
-        default="blobs",
-        help=f"comma-separated search scopes: {', '.join(sorted(VALID_SCOPES))} (default: %(default)s)",
-    )
-
-    # Search filters
-    parser.add_argument(
-        "-f",
-        "--filename",
-        metavar="FILENAME",
-        help="search content only in files matching this (supports wildcard operator '*')",
-    )
-    parser.add_argument(
-        "-e",
-        "--extension",
-        metavar="EXT",
-        help="search content only in files with this extension",
-    )
-    parser.add_argument(
-        "-P",
-        "--path",
-        metavar="FILE_PATH",
-        help="search content only in files with the given path",
-    )
-    parser.add_argument(
-        "-a",
-        "--archived",
-        choices=["include", "only", "exclude"],
-        default="include",
-        help=(
-            "search in all projects, search only in archived projects, "
-            "exclude archived projects (default: %(default)s)"
-        ),
-    )
-
-    # Connection options (used for both search override and setup)
-    parser.add_argument(
-        "--api-url",
-        metavar="API_URL_BASE",
-        help=f"GitLab API base URL (default: {DEFAULT_API_URL})",
-    )
-    parser.add_argument(
-        "--ignore-cert",
-        action="store_true",
-        default=False,
-        help="ignore API certificate errors",
-    )
-    parser.add_argument(
-        "--max-requests",
-        metavar="N_REQUESTS",
-        type=int,
-        help=(
-            "maximum number of concurrent requests sent to GitLab "
-            f"(default: {DEFAULT_MAX_REQUESTS})"
-        ),
-    )
-    parser.add_argument(
-        "--token",
-        metavar="PERSONAL_ACCESS_TOKEN",
-        default=None,
-        help="GitLab personal access token",
-    )
-    parser.add_argument(
-        "--color",
-        choices=["auto", "always", "never"],
-        default="auto",
-        help="colorize output (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="enable debug logging",
-    )
-
-    # Setup options
-    parser.add_argument(
-        "--setup",
-        action="store_true",
-        help="store the provided options in a configuration file",
-    )
-    parser.add_argument(
-        "--dir",
-        metavar="CONFIG_DIR",
-        default=".",
-        help="configuration file directory (default: %(default)s)",
-    )
-
-    return parser
-
-def run_setup(args: argparse.Namespace) -> None:
+def run_setup(parsed: ParsedCommand) -> None:
     """Run the setup command.
 
     Args:
-        args: Parsed command-line arguments
+        parsed: Parsed command
     """
     config_path = write_config(
-        directory=args.dir,
-        token=args.token,
-        api_url=args.api_url if args.api_url else DEFAULT_API_URL,
-        ignore_cert=bool(args.ignore_cert),
-        max_requests=args.max_requests if args.max_requests else DEFAULT_MAX_REQUESTS,
+        directory=parsed.config_dir,
+        token=parsed.token,
+        api_url=parsed.api_url if parsed.api_url else DEFAULT_API_URL,
+        ignore_cert=parsed.ignore_cert,
+        max_requests=parsed.max_requests if parsed.max_requests else DEFAULT_MAX_REQUESTS,
     )
-    printer = ResultPrinter(ColorFormatter(args.color))
+    printer = ResultPrinter(ColorFormatter(parsed.color))
     printer.print_success(
         f"Successfully wrote config to {config_path}, "
         f"{PROGRAM_NAME} is now ready to be used"
     )
 
-async def run_search(args: argparse.Namespace) -> None:
+
+async def run_search(parsed: ParsedCommand) -> None:
     """Run the search command.
 
     Args:
-        args: Parsed command-line arguments
+        parsed: Parsed command with expression and options
     """
     logger = logging.getLogger(__name__)
     config = load_config()
 
     # Apply CLI overrides
-    if args.api_url is not None:
-        config.api_url = args.api_url
-    if args.ignore_cert:
+    if parsed.api_url is not None:
+        config.api_url = parsed.api_url
+    if parsed.ignore_cert:
         config.ignore_cert = True
-    if args.max_requests is not None:
-        config.max_requests = args.max_requests
-    if args.token is not None:
-        config.token = args.token
+    if parsed.max_requests is not None:
+        config.max_requests = parsed.max_requests
+    if parsed.token is not None:
+        config.token = parsed.token
 
     client = GitLabClient(config)
-    printer = ResultPrinter(ColorFormatter(args.color))
-
-    criteria = SearchCriteria(
-        search_query=args.search_query,
-        filename=args.filename,
-        extension=args.extension,
-        path=args.path,
-    )
 
     try:
-        # Determine project source
-        if args.projects:
-            logger.debug("Fetching projects by IDs or names")
-            projects = await client.fetch_projects_by_ids(args.projects.split(","))
-        elif args.user:
-            logger.debug("Fetching projects of user: %s", args.user)
-            logger.debug("Archived projects: %s", args.archived)
-            projects = await client.fetch_user_projects(args.user, args.archived)
-        elif args.my_projects:
-            logger.debug("Fetching own user projects")
-            projects = await client.fetch_my_projects(args.archived)
-        else:
-            logger.debug("Fetching projects by available groups")
-            groups = await client.fetch_groups(args.groups)
-            projects = await client.fetch_projects_in_groups(groups, args.archived)
-
-        # Perform search for each scope
-        for scope in args.scope:
-            if scope == "blobs":
-                results = await client.search_blobs_in_projects(projects, criteria)
-                printer.print_blob_results(criteria.search_query, results)
-            elif scope == "files":
-                results = await client.search_filenames_in_projects(projects, criteria)
-                printer.print_file_results(results)
-            else:
-                results = await client.search_scope_in_projects(projects, scope, criteria.search_query)
-                printer.print_scope_results(scope, criteria.search_query, results)
+        await execute_search(client, parsed)
     except Exception as e:
+        logger.exception("Search failed")
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 def configure_logging(debug: bool) -> None:
     """Configure logging based on debug flag.
@@ -275,22 +177,57 @@ def configure_logging(debug: bool) -> None:
         format="%(levelname)s: %(message)s",
     )
 
+
 def main() -> None:
-    parser = create_argument_parser()
-    args = parser.parse_args()
+    """Main entry point."""
+    # Handle --help and --version before custom parsing
+    if len(sys.argv) == 1:
+        print_help()
+        sys.exit(1)
 
-    configure_logging(args.debug)
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print_help()
+        sys.exit(0)
 
-    if args.setup:
-        run_setup(args)
-    elif not args.search_query and args.scope != ['files']:
-        parser.print_help()
+    if "-V" in sys.argv or "--version" in sys.argv:
+        print_version()
+        sys.exit(0)
+
+    try:
+        parsed = parse_command(sys.argv[1:])
+    except ParseError as e:
+        if str(e) == "VERSION":
+            print_version()
+            sys.exit(0)
+        elif str(e) == "HELP":
+            print_help()
+            sys.exit(0)
+        else:
+            print(f"Error: {e}", file=sys.stderr)
+            print(f"Try '{PROGRAM_NAME} --help' for more information.", file=sys.stderr)
+            sys.exit(1)
+
+    configure_logging(parsed.debug)
+
+    # Validate scopes
+    try:
+        validate_scopes(parsed.scope)
+    except ParseError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if parsed.setup:
+        run_setup(parsed)
+    elif parsed.query_expression is None and parsed.scope != ["files"]:
+        print("Error: -q QUERY is required (unless using -s files)", file=sys.stderr)
+        print(f"Try '{PROGRAM_NAME} --help' for more information.", file=sys.stderr)
         sys.exit(1)
     else:
         try:
-            asyncio.run(run_search(args))
+            asyncio.run(run_search(parsed))
         except KeyboardInterrupt:
-            print('Received interrupt, exiting')
+            print("Received interrupt, exiting")
+
 
 if __name__ == "__main__":
     main()
