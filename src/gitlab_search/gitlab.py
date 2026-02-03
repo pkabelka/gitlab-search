@@ -531,12 +531,13 @@ class GitLabClient:
 
         # Check extension
         if criteria.extension:
-            if not name.endswith(f".{criteria.extension}"):
+            ext_with_dot = criteria.extension if criteria.extension.startswith(".") else f".{criteria.extension}"
+            if not name.endswith(ext_with_dot):
                 return False
 
         # Check path pattern
         if criteria.path:
-            if not fnmatch.fnmatch(path, f"*{criteria.path}*"):
+            if not fnmatch.fnmatch(path, criteria.path):
                 return False
 
         # Check search_query in filename
