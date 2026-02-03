@@ -1,6 +1,7 @@
 """Configuration management for gitlab-search."""
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def load_config() -> Config:
 
     return Config(
         api_url=data.get("api-url", DEFAULT_API_URL),
-        token=data.get("token", None),
+        token=None,
         ignore_cert=data.get("ignore-cert", False),
         max_requests=data.get("max-requests", DEFAULT_MAX_REQUESTS),
         config_path=str(config_path),
@@ -64,7 +65,6 @@ def load_config() -> Config:
 
 def write_config(
     directory: str,
-    token: str | None = None,
     api_url: str = DEFAULT_API_URL,
     ignore_cert: bool = False,
     max_requests: int = DEFAULT_MAX_REQUESTS,
@@ -73,7 +73,6 @@ def write_config(
 
     Args:
         directory: Directory to save config file in
-        token: GitLab personal access token
         api_url: Full GitLab API base URL (e.g., https://gitlab.com/api/v4)
         ignore_cert: Whether to ignore certificate errors
         max_requests: Maximum concurrent requests
@@ -95,10 +94,29 @@ def write_config(
     if max_requests != DEFAULT_MAX_REQUESTS:
         config_data["max-requests"] = max_requests
 
-    if token is not None:
-        config_data["token"] = token
-
     with open(file_path, "w") as f:
         json.dump(config_data, f, indent=4)
 
     return str(file_path)
+
+
+def resolve_token(token: str | None, token_file: str | None) -> str | None:
+    """Resolve GitLab token from various sources.
+
+    Priority (highest to lowest):
+    1. Direct token argument (--token) or token file (--token-file)
+    2. GITLAB_SEARCH_TOKEN environment variable
+
+    Args:
+        token: Direct token value from CLI
+        token_file: Path to file containing token
+
+    Returns:
+        Resolved token or None if not found
+    """
+    if token:
+        return token
+    if token_file:
+        with open(token_file) as f:
+            return f.read().strip()
+    return os.getenv("GITLAB_SEARCH_TOKEN")

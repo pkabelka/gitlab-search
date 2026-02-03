@@ -60,6 +60,7 @@ class TokenizeResult:
     ignore_cert: bool = False
     max_requests: int | None = None
     token: str | None = None
+    token_file: str | None = None
     color: str = "auto"
     debug: bool = False
     setup: bool = False
@@ -220,6 +221,13 @@ def tokenize_args(args: list[str]) -> TokenizeResult:
             if i >= len(args):
                 raise ParseError(f"{arg} requires a token argument")
             result.token = args[i]
+            pending_not = False
+
+        elif arg == "--token-file":
+            i += 1
+            if i >= len(args):
+                raise ParseError(f"{arg} requires a file path argument")
+            result.token_file = args[i]
             pending_not = False
 
         elif arg == "--color":
@@ -419,6 +427,7 @@ def parse_command(args: list[str]) -> ParsedCommand:
         ignore_cert=result.ignore_cert,
         max_requests=result.max_requests,
         token=result.token,
+        token_file=result.token_file,
         color=result.color,
         debug=result.debug,
         setup=result.setup,

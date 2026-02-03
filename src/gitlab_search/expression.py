@@ -159,6 +159,7 @@ class ParsedCommand:
     ignore_cert: bool = False
     max_requests: int | None = None
     token: str | None = None
+    token_file: str | None = None
     color: str = "auto"
     debug: bool = False
 

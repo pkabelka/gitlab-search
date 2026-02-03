@@ -9,6 +9,7 @@ from .config import (
     DEFAULT_API_URL,
     DEFAULT_MAX_REQUESTS,
     load_config,
+    resolve_token,
     write_config,
 )
 from .executor import execute_search
@@ -65,6 +66,10 @@ Connection Options:
   --ignore-cert         Ignore API certificate errors
   --max-requests N      Max concurrent requests (default: {DEFAULT_MAX_REQUESTS})
   --token TOKEN         GitLab personal access token
+  --token-file FILE     Read GitLab token from file (mutually exclusive with --token)
+
+Environment Variables:
+  GITLAB_SEARCH_TOKEN   GitLab token (used if --token/--token-file not provided)
 
 Setup:
   --setup               Store options in configuration file
@@ -131,7 +136,6 @@ def run_setup(parsed: ParsedCommand) -> None:
     """
     config_path = write_config(
         directory=parsed.config_dir,
-        token=parsed.token,
         api_url=parsed.api_url if parsed.api_url else DEFAULT_API_URL,
         ignore_cert=parsed.ignore_cert,
         max_requests=parsed.max_requests if parsed.max_requests else DEFAULT_MAX_REQUESTS,
@@ -159,15 +163,17 @@ async def run_search(parsed: ParsedCommand) -> None:
         config.ignore_cert = True
     if parsed.max_requests is not None:
         config.max_requests = parsed.max_requests
-    if parsed.token is not None:
-        config.token = parsed.token
+    config.token = resolve_token(parsed.token, parsed.token_file)
+    if not config.token:
+        logger.critical("Token not provided")
+        sys.exit(1)
 
     client = GitLabClient(config)
 
     try:
         await execute_search(client, parsed)
     except Exception as e:
-        logger.exception("Search failed")
+        logger.critical("Search failed")
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -221,6 +227,11 @@ def main() -> None:
         validate_scopes(parsed.scope)
     except ParseError as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Check mutual exclusivity of --token and --token-file
+    if parsed.token is not None and parsed.token_file is not None:
+        print("Error: --token and --token-file are mutually exclusive", file=sys.stderr)
         sys.exit(1)
 
     if parsed.setup:
