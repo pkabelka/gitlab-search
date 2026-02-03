@@ -24,7 +24,7 @@ def find_config_file() -> Path | None:
 
     Searches in order:
     1. Current working directory
-    2. Home directory
+    2. User config directory (XDG_CONFIG_HOME)
     3. /etc/
 
     Returns:
@@ -32,7 +32,8 @@ def find_config_file() -> Path | None:
     """
     search_paths = [
         Path.cwd() / CONFIG_FILENAME,
-        Path.home() / CONFIG_FILENAME,
+        Path(os.getenv('XDG_CONFIG_HOME', '')) / CONFIG_FILENAME,
+        Path(os.getenv('HOME', '')) / '.config' / CONFIG_FILENAME,
         Path("/etc") / CONFIG_FILENAME,
     ]
 
@@ -42,16 +43,23 @@ def find_config_file() -> Path | None:
 
     return None
 
-def load_config() -> Config:
+def load_config(config_file: str | None = None) -> Config:
     """Load configuration from config file.
+
+    Args:
+        config_file: Optional explicit config file path. If provided,
+                     uses this path directly instead of searching.
 
     Returns:
         Loaded Config object
     """
-    config_path = find_config_file()
+    if config_file is not None:
+        config_path = Path(config_file)
+    else:
+        config_path = find_config_file()
 
     data = {}
-    if config_path is not None:
+    if config_path is not None and config_path.is_file():
         with open(config_path) as f:
             data = json.load(f)
 
@@ -64,7 +72,7 @@ def load_config() -> Config:
     )
 
 def write_config(
-    directory: str,
+    file_path: str | None = None,
     api_url: str = DEFAULT_API_URL,
     ignore_cert: bool = False,
     max_requests: int = DEFAULT_MAX_REQUESTS,
@@ -72,7 +80,8 @@ def write_config(
     """Write configuration to file.
 
     Args:
-        directory: Directory to save config file in
+        file_path: Path to save config file. If None, uses default
+                   location (./CONFIG_FILENAME)
         api_url: Full GitLab API base URL (e.g., https://gitlab.com/api/v4)
         ignore_cert: Whether to ignore certificate errors
         max_requests: Maximum concurrent requests
@@ -80,7 +89,10 @@ def write_config(
     Returns:
         Path to the written config file
     """
-    file_path = Path(directory) / CONFIG_FILENAME
+    if file_path is not None:
+        output_path = Path(file_path)
+    else:
+        output_path = Path(".") / CONFIG_FILENAME
 
     config_data: dict[str, str | bool | int] = {}
 
@@ -94,10 +106,10 @@ def write_config(
     if max_requests != DEFAULT_MAX_REQUESTS:
         config_data["max-requests"] = max_requests
 
-    with open(file_path, "w") as f:
+    with open(output_path, "w") as f:
         json.dump(config_data, f, indent=4)
 
-    return str(file_path)
+    return str(output_path)
 
 
 def resolve_token(token: str | None, token_file: str | None) -> str | None:

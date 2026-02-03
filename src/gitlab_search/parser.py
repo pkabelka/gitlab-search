@@ -64,7 +64,7 @@ class TokenizeResult:
     color: str = "auto"
     debug: bool = False
     setup: bool = False
-    config_dir: str = "."
+    config_file: str | None = None
 
 
 def tokenize_args(args: list[str]) -> TokenizeResult:
@@ -247,11 +247,11 @@ def tokenize_args(args: list[str]) -> TokenizeResult:
             result.setup = True
             pending_not = False
 
-        elif arg == "--dir":
+        elif arg in ("-C", "--config"):
             i += 1
             if i >= len(args):
-                raise ParseError(f"{arg} requires a directory argument")
-            result.config_dir = args[i]
+                raise ParseError(f"{arg} requires a file path argument")
+            result.config_file = args[i]
             pending_not = False
 
         elif arg in ("-V", "--version"):
@@ -431,5 +431,5 @@ def parse_command(args: list[str]) -> ParsedCommand:
         color=result.color,
         debug=result.debug,
         setup=result.setup,
-        config_dir=result.config_dir,
+        config_file=result.config_file,
     )

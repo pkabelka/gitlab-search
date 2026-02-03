@@ -6,6 +6,7 @@ import sys
 from importlib.metadata import version
 
 from .config import (
+    CONFIG_FILENAME,
     DEFAULT_API_URL,
     DEFAULT_MAX_REQUESTS,
     load_config,
@@ -73,7 +74,7 @@ Environment Variables:
 
 Setup:
   --setup               Store options in configuration file
-  --dir DIR             Configuration file directory (default: .)
+  -C, --config FILE     Configuration file path (default: ./{CONFIG_FILENAME})
 
 Other:
   --color MODE          Colorize output: auto, always, never (default: auto)
@@ -135,7 +136,7 @@ def run_setup(parsed: ParsedCommand) -> None:
         parsed: Parsed command
     """
     config_path = write_config(
-        directory=parsed.config_dir,
+        file_path=parsed.config_file,
         api_url=parsed.api_url if parsed.api_url else DEFAULT_API_URL,
         ignore_cert=parsed.ignore_cert,
         max_requests=parsed.max_requests if parsed.max_requests else DEFAULT_MAX_REQUESTS,
@@ -154,7 +155,7 @@ async def run_search(parsed: ParsedCommand) -> None:
         parsed: Parsed command with expression and options
     """
     logger = logging.getLogger(__name__)
-    config = load_config()
+    config = load_config(parsed.config_file)
 
     # Apply CLI overrides
     if parsed.api_url is not None:

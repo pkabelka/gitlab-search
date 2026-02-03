@@ -165,7 +165,7 @@ class ParsedCommand:
 
     # Setup mode
     setup: bool = False
-    config_dir: str = "."
+    config_file: str | None = None
 
     def get_all_queries(self) -> list[str]:
         """Get all unique query strings from the expression tree.
