@@ -427,6 +427,70 @@ class TestParseCommand(unittest.TestCase):
         self.assertEqual(parsed.groups, ["grp1", "grp2"])
         self.assertTrue(parsed.recursive)
 
+    def test_extension_exclusion(self):
+        """Test extension exclusion with ! -e."""
+        result = tokenize_args(["-p", "proj", "-q", "x", "!", "-e", "md"])
+
+        self.assertEqual(result.exclude_extensions, ["md"])
+        # NOT token should be consumed
+        self.assertTrue(
+            all(t.type != TokenType.NOT for t in result.tokens[:-1])
+        )
+
+    def test_filename_exclusion(self):
+        """Test filename exclusion with -not -f."""
+        result = tokenize_args(["-p", "proj", "-q", "x", "-not", "-f", "*.test.js"])
+
+        self.assertEqual(result.exclude_filenames, ["*.test.js"])
+        self.assertTrue(
+            all(t.type != TokenType.NOT for t in result.tokens[:-1])
+        )
+
+    def test_path_exclusion(self):
+        """Test path exclusion with ! -P."""
+        result = tokenize_args(["-p", "proj", "-q", "x", "!", "-P", "*vendor*"])
+
+        self.assertEqual(result.exclude_paths, ["*vendor*"])
+        self.assertTrue(
+            all(t.type != TokenType.NOT for t in result.tokens[:-1])
+        )
+
+    def test_multiple_file_exclusions(self):
+        """Test multiple file exclusions."""
+        result = tokenize_args([
+            "-p", "proj", "-q", "x",
+            "!", "-e", "md",
+            "!", "-e", "txt",
+            "!", "-f", "*.test.js"
+        ])
+
+        self.assertEqual(result.exclude_extensions, ["md", "txt"])
+        self.assertEqual(result.exclude_filenames, ["*.test.js"])
+
+    def test_inclusion_and_exclusion_combined(self):
+        """Test combining inclusion and exclusion filters."""
+        result = tokenize_args([
+            "-p", "proj", "-q", "x",
+            "-e", "py",           # Include only .py files
+            "!", "-f", "test_*"   # But exclude test files
+        ])
+
+        self.assertEqual(result.extension, "py")
+        self.assertEqual(result.exclude_filenames, ["test_*"])
+
+    def test_exclusion_parsed_command(self):
+        """Test file exclusions in ParsedCommand."""
+        parsed = parse_command([
+            "-p", "proj", "-q", "x",
+            "!", "-e", "md",
+            "!", "-f", "*.test.*",
+            "!", "-P", "*vendor*"
+        ])
+
+        self.assertEqual(parsed.exclude_extensions, ["md"])
+        self.assertEqual(parsed.exclude_filenames, ["*.test.*"])
+        self.assertEqual(parsed.exclude_paths, ["*vendor*"])
+
 
 if __name__ == "__main__":
     unittest.main()

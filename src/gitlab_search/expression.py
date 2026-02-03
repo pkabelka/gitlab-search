@@ -151,6 +151,9 @@ class ParsedCommand:
     filename: str | None = None
     extension: str | None = None
     path: str | None = None
+    exclude_filenames: list[str] = field(default_factory=list)
+    exclude_extensions: list[str] = field(default_factory=list)
+    exclude_paths: list[str] = field(default_factory=list)
     archived: str = "include"
     recursive: bool = False
 

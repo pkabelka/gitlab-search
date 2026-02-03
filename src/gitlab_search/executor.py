@@ -1,6 +1,7 @@
 """Expression-aware search executor."""
 
 import asyncio
+import fnmatch
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +16,39 @@ from .gitlab import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def matches_exclusion(
+    filename: str,
+    path: str | None,
+    exclude_filenames: list[str],
+    exclude_extensions: list[str],
+    exclude_paths: list[str],
+) -> bool:
+    """Check if a file matches any exclusion pattern.
+
+    Args:
+        filename: The filename to check
+        path: The full path (if available)
+        exclude_filenames: List of filename patterns to exclude (supports wildcards)
+        exclude_extensions: List of extensions to exclude
+        exclude_paths: List of path patterns to exclude (supports wildcards)
+
+    Returns:
+        True if the file should be excluded
+    """
+    for pattern in exclude_filenames:
+        if fnmatch.fnmatch(filename, pattern):
+            return True
+    for ext in exclude_extensions:
+        ext_with_dot = ext if ext.startswith(".") else f".{ext}"
+        if filename.endswith(ext_with_dot):
+            return True
+    check_path = path if path else filename
+    for pattern in exclude_paths:
+        if fnmatch.fnmatch(check_path, pattern):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -170,6 +204,9 @@ async def execute_blob_search(
     filename: str | None = None,
     extension: str | None = None,
     path: str | None = None,
+    exclude_filenames: list[str] | None = None,
+    exclude_extensions: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
 ) -> list[tuple[Project, list[SearchResult]]]:
     """Execute blob search with expression logic.
 
@@ -181,6 +218,9 @@ async def execute_blob_search(
         filename: Optional filename filter
         extension: Optional extension filter
         path: Optional path filter
+        exclude_filenames: Optional list of filename patterns to exclude
+        exclude_extensions: Optional list of extensions to exclude
+        exclude_paths: Optional list of path patterns to exclude
 
     Returns:
         List of (project, results) tuples matching the expression
@@ -245,6 +285,24 @@ async def execute_blob_search(
                     if result not in project_results[project.id][1]:
                         project_results[project.id][1].append(result)
 
+    # Apply exclusion filtering
+    if exclude_filenames or exclude_extensions or exclude_paths:
+        filtered_results: dict[int, tuple[Project, list[SearchResult]]] = {}
+        for project_id, (project, result_list) in project_results.items():
+            filtered = [
+                r for r in result_list
+                if not matches_exclusion(
+                    r.filename,
+                    r.filename,  # For blobs, filename is the path
+                    exclude_filenames or [],
+                    exclude_extensions or [],
+                    exclude_paths or [],
+                )
+            ]
+            if filtered:
+                filtered_results[project_id] = (project, filtered)
+        return list(filtered_results.values())
+
     return list(project_results.values())
 
 
@@ -256,6 +314,9 @@ async def execute_file_search(
     filename: str | None = None,
     extension: str | None = None,
     path: str | None = None,
+    exclude_filenames: list[str] | None = None,
+    exclude_extensions: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
 ) -> list[tuple[Project, list[FileResult]]]:
     """Execute filename search with expression logic.
 
@@ -270,6 +331,9 @@ async def execute_file_search(
         filename: Optional filename filter
         extension: Optional extension filter
         path: Optional path filter
+        exclude_filenames: Optional list of filename patterns to exclude
+        exclude_extensions: Optional list of extensions to exclude
+        exclude_paths: Optional list of path patterns to exclude
 
     Returns:
         List of (project, results) tuples matching the expression
@@ -282,7 +346,25 @@ async def execute_file_search(
             extension=extension,
             path=path,
         )
-        return await client.search_filenames_in_projects(projects, criteria)
+        results = await client.search_filenames_in_projects(projects, criteria)
+        # Apply exclusion filtering
+        if exclude_filenames or exclude_extensions or exclude_paths:
+            filtered_list: list[tuple[Project, list[FileResult]]] = []
+            for project, file_list in results:
+                kept = [
+                    f for f in file_list
+                    if not matches_exclusion(
+                        f.name,
+                        f.path,
+                        exclude_filenames or [],
+                        exclude_extensions or [],
+                        exclude_paths or [],
+                    )
+                ]
+                if kept:
+                    filtered_list.append((project, kept))
+            return filtered_list
+        return results
 
     # Execute all queries in parallel
     query_results: dict[str, dict[FileResultIdentifier, tuple[Project, FileResult]]] = {}
@@ -327,6 +409,24 @@ async def execute_file_search(
                     project_results[project.id] = (project, [])
                 if result not in project_results[project.id][1]:
                     project_results[project.id][1].append(result)
+
+    # Apply exclusion filtering
+    if exclude_filenames or exclude_extensions or exclude_paths:
+        filtered_projects: dict[int, tuple[Project, list[FileResult]]] = {}
+        for project_id, (project, file_list) in project_results.items():
+            kept_files = [
+                f for f in file_list
+                if not matches_exclusion(
+                    f.name,
+                    f.path,
+                    exclude_filenames or [],
+                    exclude_extensions or [],
+                    exclude_paths or [],
+                )
+            ]
+            if kept_files:
+                filtered_projects[project_id] = (project, kept_files)
+        return list(filtered_projects.values())
 
     return list(project_results.values())
 
@@ -432,6 +532,9 @@ async def execute_search(
                     parsed.filename,
                     parsed.extension,
                     parsed.path,
+                    parsed.exclude_filenames,
+                    parsed.exclude_extensions,
+                    parsed.exclude_paths,
                 )
             else:
                 # No query expression - shouldn't happen with required -q
@@ -448,6 +551,9 @@ async def execute_search(
                     parsed.filename,
                     parsed.extension,
                     parsed.path,
+                    parsed.exclude_filenames,
+                    parsed.exclude_extensions,
+                    parsed.exclude_paths,
                 )
             else:
                 # File search without query uses filters only
@@ -458,6 +564,23 @@ async def execute_search(
                     path=parsed.path,
                 )
                 results = await client.search_filenames_in_projects(projects, criteria)
+                # Apply exclusion filtering
+                if parsed.exclude_filenames or parsed.exclude_extensions or parsed.exclude_paths:
+                    filtered: list[tuple[Project, list[FileResult]]] = []
+                    for project, file_list in results:
+                        kept = [
+                            f for f in file_list
+                            if not matches_exclusion(
+                                f.name,
+                                f.path,
+                                parsed.exclude_filenames,
+                                parsed.exclude_extensions,
+                                parsed.exclude_paths,
+                            )
+                        ]
+                        if kept:
+                            filtered.append((project, kept))
+                    results = filtered
             printer.print_file_results(results)
 
         else:

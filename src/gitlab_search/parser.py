@@ -54,6 +54,9 @@ class TokenizeResult:
     filename: str | None = None
     extension: str | None = None
     path: str | None = None
+    exclude_filenames: list[str] = field(default_factory=list)
+    exclude_extensions: list[str] = field(default_factory=list)
+    exclude_paths: list[str] = field(default_factory=list)
     archived: str = "include"
     recursive: bool = False
     api_url: str | None = None
@@ -163,21 +166,36 @@ def tokenize_args(args: list[str]) -> TokenizeResult:
             i += 1
             if i >= len(args):
                 raise ParseError(f"{arg} requires a filename argument")
-            result.filename = args[i]
+            # Check if this is an exclusion (preceded by -not)
+            if pending_not and result.tokens and result.tokens[-1].type == TokenType.NOT:
+                result.tokens.pop()  # Remove the NOT token
+                result.exclude_filenames.append(args[i])
+            else:
+                result.filename = args[i]
             pending_not = False
 
         elif arg in ("-e", "--extension"):
             i += 1
             if i >= len(args):
                 raise ParseError(f"{arg} requires an extension argument")
-            result.extension = args[i]
+            # Check if this is an exclusion (preceded by -not)
+            if pending_not and result.tokens and result.tokens[-1].type == TokenType.NOT:
+                result.tokens.pop()  # Remove the NOT token
+                result.exclude_extensions.append(args[i])
+            else:
+                result.extension = args[i]
             pending_not = False
 
         elif arg in ("-P", "--path"):
             i += 1
             if i >= len(args):
                 raise ParseError(f"{arg} requires a path argument")
-            result.path = args[i]
+            # Check if this is an exclusion (preceded by -not)
+            if pending_not and result.tokens and result.tokens[-1].type == TokenType.NOT:
+                result.tokens.pop()  # Remove the NOT token
+                result.exclude_paths.append(args[i])
+            else:
+                result.path = args[i]
             pending_not = False
 
         elif arg == "--archived":
@@ -421,6 +439,9 @@ def parse_command(args: list[str]) -> ParsedCommand:
         filename=result.filename,
         extension=result.extension,
         path=result.path,
+        exclude_filenames=result.exclude_filenames,
+        exclude_extensions=result.exclude_extensions,
+        exclude_paths=result.exclude_paths,
         archived=result.archived,
         recursive=result.recursive,
         api_url=result.api_url,

@@ -58,6 +58,11 @@ Search Filters:
   -e, --extension EXT   Search only in files with this extension
   -P, --path PATH       Search only in files with this path
 
+  Use -not before -f, -e, or -P to exclude files:
+    -q "term" ! -e md              Exclude .md files
+    -q "term" ! -f "*.test.js"     Exclude test files
+    -q "term" ! -P "*vendor*"      Exclude vendor directory
+
 Archive Filter:
   --archived MODE       Filter archived projects: include, only, exclude
                         (default: include)
@@ -104,6 +109,12 @@ Examples:
 
   # Combined AND and OR with grouping
   {PROGRAM_NAME} -p myproject \\( -q "a" -o -q "b" \\) -q "c"
+
+  # Exclude markdown files from search
+  {PROGRAM_NAME} -p myproject -q "term" ! -e md
+
+  # Exclude test files and vendor directory
+  {PROGRAM_NAME} -p myproject -q "term" ! -f "*.test.*" ! -P "*vendor*"
 """)
 
 
