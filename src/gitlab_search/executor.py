@@ -51,6 +51,45 @@ def matches_exclusion(
     return False
 
 
+def matches_file_criteria(
+    file: dict,
+    criteria: SearchCriteria,
+) -> bool:
+    """Check if a file matches the search criteria.
+
+    Args:
+        file: File dict from repository tree API
+        criteria: Search criteria with filename/extension/path patterns
+
+    Returns:
+        True if file matches criteria
+    """
+    name = file.get("name", "")
+    path = file.get("path", "")
+
+    # Check filename pattern (supports wildcards)
+    if criteria.filename:
+        if not fnmatch.fnmatch(name, criteria.filename):
+            return False
+
+    # Check extension
+    if criteria.extension:
+        ext_with_dot = criteria.extension if criteria.extension.startswith(".") else f".{criteria.extension}"
+        if not name.endswith(ext_with_dot):
+            return False
+
+    # Check path pattern
+    if criteria.path:
+        if not fnmatch.fnmatch(path, criteria.path):
+            return False
+
+    # Check search_query in filename
+    if criteria.search_query and criteria.search_query not in name:
+        return False
+
+    return True
+
+
 @dataclass(frozen=True)
 class ResultIdentifier:
     """Unique identifier for a search result (file-level for AND logic)."""

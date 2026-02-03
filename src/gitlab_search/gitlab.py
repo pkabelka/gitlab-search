@@ -509,43 +509,6 @@ class GitLabClient:
         logger.debug("Using projects: %s", ", ".join(p.name for p in projects))
         return list(projects)
 
-    def _matches_file_criteria(self, file: dict, criteria: SearchCriteria) -> bool:
-        """Check if a file matches the search criteria.
-
-        Args:
-            file: File dict from repository tree API
-            criteria: Search criteria with filename/extension/path patterns
-
-        Returns:
-            True if file matches criteria
-        """
-        import fnmatch
-
-        name = file.get("name", "")
-        path = file.get("path", "")
-
-        # Check filename pattern (supports wildcards)
-        if criteria.filename:
-            if not fnmatch.fnmatch(name, criteria.filename):
-                return False
-
-        # Check extension
-        if criteria.extension:
-            ext_with_dot = criteria.extension if criteria.extension.startswith(".") else f".{criteria.extension}"
-            if not name.endswith(ext_with_dot):
-                return False
-
-        # Check path pattern
-        if criteria.path:
-            if not fnmatch.fnmatch(path, criteria.path):
-                return False
-
-        # Check search_query in filename
-        if criteria.search_query and criteria.search_query not in name:
-            return False
-
-        return True
-
     async def search_filenames_in_project(
         self, project: Project, criteria: SearchCriteria, ref: str = "HEAD"
     ) -> tuple[Project, list[FileResult]]:
@@ -559,6 +522,8 @@ class GitLabClient:
         Returns:
             Tuple of (project, matching files)
         """
+        from .executor import matches_file_criteria
+
         url = f"/projects/{project.id}/repository/tree?recursive=true&per_page=100&ref={ref}"
         try:
             all_files = await self._paginated_request(url)
@@ -568,7 +533,7 @@ class GitLabClient:
         matching = [
             FileResult(path=f["path"], name=f["name"], type=f["type"])
             for f in all_files
-            if f["type"] == "blob" and self._matches_file_criteria(f, criteria)
+            if f["type"] == "blob" and matches_file_criteria(f, criteria)
         ]
 
         return project, matching
