@@ -3,7 +3,7 @@
 import re
 import sys
 
-from .gitlab import FileResult, Project, SearchResult
+from .gitlab import FileCriteriaPatterns, FileResult, Project, SearchResult
 
 class ColorFormatter:
     """Handles colored terminal output with configurable color mode."""
@@ -162,6 +162,42 @@ class ResultPrinter:
                 result = pattern.sub(lambda m: self.fmt.red(m.group(1)), result)
         return result
 
+    def highlight_file_match(
+        self,
+        patterns: FileCriteriaPatterns,
+        name: str,
+        path: str,
+    ) -> str:
+        """Highlight matching portions of filename/path.
+
+        Args:
+            patterns: Compiled patterns for matching/highlighting
+            name: Filename to check against filename/extension patterns
+            path: Full path to check against path pattern and to return highlighted
+
+        Returns:
+            Path with matched portions highlighted in red
+        """
+        def _highlight_match(match: re.Match):
+            return self.fmt.red(match.group(0))
+
+        result = path
+
+        # Highlight filename match within the path
+        if patterns.filename:
+            highlighted_name = patterns.filename.sub(_highlight_match, name)
+            result = result.replace(name, highlighted_name)
+
+        # Highlight extension match within the path
+        if patterns.extension:
+            result = patterns.extension.sub(_highlight_match, result)
+
+        # Highlight path match
+        if patterns.path:
+            result = patterns.path.sub(_highlight_match, result)
+
+        return result
+
     def _print_project_header(self, project: Project) -> None:
         """Print project header with archived indicator if needed."""
         archived_info = ""
@@ -170,18 +206,32 @@ class ResultPrinter:
         print(f"{self.fmt.bold(self.fmt.green(project.name))}{archived_info}:")
 
     def print_blob_results(
-        self, search_queries: str | list[str], results: list[tuple[Project, list[SearchResult]]]
+        self,
+        search_queries: str | list[str],
+        results: list[tuple[Project, list[SearchResult]]],
+        patterns: FileCriteriaPatterns | None = None,
     ) -> None:
         """Print blob search results with formatting.
 
         Args:
             search_queries: The search query/queries used
             results: List of (project, search results) tuples
+            patterns: Optional patterns for highlighting filename matches
         """
         for project, search_results in results:
             formatted_results = ""
             for result in search_results:
-                url = url_to_line(project, result)
+                # Highlight filename if patterns provided
+                filename_display = result.filename
+                if patterns and patterns.has_any():
+                    filename_display = self.highlight_file_match(
+                        patterns, result.filename, result.filename
+                    )
+                # Build URL with potentially highlighted filename
+                number_of_lines = result.data.count("\n")
+                end_line = result.startline + number_of_lines - 1
+                url = f"{project.web_url}/blob/{result.ref}/{filename_display}#L{result.startline}-{end_line}"
+
                 highlighted_data = self.highlight_search_query(
                     search_queries, indent_preview(result.data)
                 )
@@ -192,17 +242,23 @@ class ResultPrinter:
             print(formatted_results)
 
     def print_file_results(
-        self, results: list[tuple[Project, list[FileResult]]]
+        self,
+        results: list[tuple[Project, list[FileResult]]],
+        patterns: FileCriteriaPatterns | None = None,
     ) -> None:
         """Print filename search results.
 
         Args:
             results: List of (project, file results) tuples
+            patterns: Optional patterns for highlighting matches
         """
         for project, file_results in results:
             self._print_project_header(project)
             for result in file_results:
-                url = f"{project.web_url}/-/blob/HEAD/{result.path}"
+                path_display = result.path
+                if patterns and patterns.has_any():
+                    path_display = self.highlight_file_match(patterns, result.name, result.path)
+                url = f"{project.web_url}/-/blob/HEAD/{path_display}"
                 print(f"\t{url}")
 
     def print_scope_results(

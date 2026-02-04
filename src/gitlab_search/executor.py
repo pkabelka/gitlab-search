@@ -4,10 +4,12 @@ import asyncio
 import fnmatch
 import logging
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import Any
 
 from .expression import ExprNode, ParsedCommand, set_universe
 from .gitlab import (
+    FileCriteriaPatterns,
     FileResult,
     GitLabClient,
     Project,
@@ -49,45 +51,6 @@ def matches_exclusion(
         if fnmatch.fnmatch(check_path, pattern):
             return True
     return False
-
-
-def matches_file_criteria(
-    file: dict,
-    criteria: SearchCriteria,
-) -> bool:
-    """Check if a file matches the search criteria.
-
-    Args:
-        file: File dict from repository tree API
-        criteria: Search criteria with filename/extension/path patterns
-
-    Returns:
-        True if file matches criteria
-    """
-    name = file.get("name", "")
-    path = file.get("path", "")
-
-    # Check filename pattern (supports wildcards)
-    if criteria.filename:
-        if not fnmatch.fnmatch(name, criteria.filename):
-            return False
-
-    # Check extension
-    if criteria.extension:
-        ext_with_dot = criteria.extension if criteria.extension.startswith(".") else f".{criteria.extension}"
-        if not name.endswith(ext_with_dot):
-            return False
-
-    # Check path pattern
-    if criteria.path:
-        if not fnmatch.fnmatch(path, criteria.path):
-            return False
-
-    # Check search_query in filename
-    if criteria.search_query and criteria.search_query not in name:
-        return False
-
-    return True
 
 
 @dataclass(frozen=True)
@@ -240,9 +203,7 @@ async def execute_blob_search(
     projects: list[Project],
     expression: ExprNode,
     all_queries: list[str],
-    filename: str | None = None,
-    extension: str | None = None,
-    path: str | None = None,
+    criteria: SearchCriteria,
 ) -> list[tuple[Project, list[SearchResult]]]:
     """Execute blob search with expression logic.
 
@@ -251,9 +212,7 @@ async def execute_blob_search(
         projects: Projects to search in
         expression: Expression tree for query logic
         all_queries: All unique query strings in expression
-        filename: Optional filename filter
-        extension: Optional extension filter
-        path: Optional path filter
+        criteria: Search criteria like query, filename, path, ext
 
     Returns:
         List of (project, results) tuples matching the expression
@@ -266,13 +225,7 @@ async def execute_blob_search(
     query_results: dict[str, dict[ResultIdentifier, tuple[Project, list[SearchResult]]]] = {}
 
     async def search_query(query: str) -> tuple[str, list[tuple[Project, list[SearchResult]]]]:
-        criteria = SearchCriteria(
-            search_query=query,
-            filename=filename,
-            extension=extension,
-            path=path,
-        )
-        results = await client.search_blobs_in_projects(projects, criteria)
+        results = await client.search_blobs_in_projects(projects, dataclass_replace(criteria, search_query=query))
         return query, results
 
     # Run all queries concurrently
@@ -410,6 +363,32 @@ async def execute_search(
     all_queries = parsed.get_all_queries()
     expression = parsed.query_expression
 
+    # Create file criteria and patterns for filtering and highlighting
+    file_criteria = SearchCriteria(
+        search_query="",
+        filename=parsed.filename,
+        extension=parsed.extension,
+        path=parsed.path,
+    )
+    file_patterns = FileCriteriaPatterns.from_criteria(file_criteria)
+
+    def _filter_results(results: list[tuple[Project, list[Any]]], filename_func, path_func):
+        filtered_results = []
+        for project, result_list in results:
+            filtered = [
+                r for r in result_list
+                if not matches_exclusion(
+                    filename_func(r),
+                    path_func(r),
+                    parsed.exclude_filenames,
+                    parsed.exclude_extensions,
+                    parsed.exclude_paths,
+                )
+            ]
+            if filtered:
+                filtered_results.append((project, filtered))
+        return filtered_results
+
     # Perform search for each scope
     for scope in parsed.scope:
         if scope == "blobs":
@@ -419,58 +398,22 @@ async def execute_search(
                     projects,
                     expression,
                     all_queries,
-                    parsed.filename,
-                    parsed.extension,
-                    parsed.path,
+                    file_criteria,
                 )
             else:
                 # No query expression - shouldn't happen with required -q
                 results = []
             # Apply exclusion filtering
             if parsed.exclude_filenames or parsed.exclude_extensions or parsed.exclude_paths:
-                filtered_blobs: list[tuple[Project, list[SearchResult]]] = []
-                for project, result_list in results:
-                    filtered = [
-                        r for r in result_list
-                        if not matches_exclusion(
-                            r.filename,
-                            r.filename,
-                            parsed.exclude_filenames,
-                            parsed.exclude_extensions,
-                            parsed.exclude_paths,
-                        )
-                    ]
-                    if filtered:
-                        filtered_blobs.append((project, filtered))
-                results = filtered_blobs
-            printer.print_blob_results(all_queries, results)
+                results = _filter_results(results, lambda x: x.filename, lambda x: x.filename)
+            printer.print_blob_results(all_queries, results, file_patterns)
 
         elif scope == "files":
-            criteria = SearchCriteria(
-                search_query="",
-                filename=parsed.filename,
-                extension=parsed.extension,
-                path=parsed.path,
-            )
-            results = await client.search_filenames_in_projects(projects, criteria)
+            results = await client.search_filenames_in_projects(projects, file_criteria)
             # Apply exclusion filtering
             if parsed.exclude_filenames or parsed.exclude_extensions or parsed.exclude_paths:
-                filtered_files: list[tuple[Project, list[FileResult]]] = []
-                for project, file_list in results:
-                    kept = [
-                        f for f in file_list
-                        if not matches_exclusion(
-                            f.name,
-                            f.path,
-                            parsed.exclude_filenames,
-                            parsed.exclude_extensions,
-                            parsed.exclude_paths,
-                        )
-                    ]
-                    if kept:
-                        filtered_files.append((project, kept))
-                results = filtered_files
-            printer.print_file_results(results)
+                results = _filter_results(results, lambda x: x.name, lambda x: x.path)
+            printer.print_file_results(results, file_patterns)
 
         else:
             if expression:

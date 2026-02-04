@@ -1,8 +1,10 @@
 """GitLab API client with async support."""
 
 import asyncio
+import fnmatch
 import json
 import logging
+import re
 import ssl
 import urllib.error
 import urllib.request
@@ -54,6 +56,7 @@ class SearchResult:
     ref: str
     startline: int
 
+
 @dataclass
 class SearchCriteria:
     """Search criteria for GitLab search."""
@@ -61,6 +64,50 @@ class SearchCriteria:
     filename: str | None = None
     extension: str | None = None
     path: str | None = None
+
+
+@dataclass
+class FileCriteriaPatterns:
+    """Compiled regex patterns from SearchCriteria for matching and highlighting."""
+    filename: re.Pattern[str] | None = None
+    extension: re.Pattern[str] | None = None
+    path: re.Pattern[str] | None = None
+
+    @classmethod
+    def from_criteria(cls, criteria: SearchCriteria) -> "FileCriteriaPatterns":
+        """Create compiled patterns from SearchCriteria."""
+        ext = criteria.extension
+        return cls(
+            filename=re.compile(fnmatch.translate(criteria.filename), re.IGNORECASE) if criteria.filename else None,
+            extension=re.compile(
+                re.escape(ext if ext.startswith('.') else f'.{ext}') + r'\Z',
+                re.IGNORECASE
+            ) if ext else None,
+            path=re.compile(fnmatch.translate(criteria.path), re.IGNORECASE) if criteria.path else None,
+        )
+
+    def has_any(self) -> bool:
+        """Check if any pattern is set."""
+        return self.filename is not None or self.extension is not None or self.path is not None
+
+    def matches(self, name: str, path: str) -> bool:
+        """Check if filename and path match all set patterns.
+
+        Args:
+            name: Filename to check against filename/extension patterns
+            path: Full path to check against path pattern
+
+        Returns:
+            True if all set patterns match
+        """
+        if self.filename and not self.filename.match(name):
+            return False
+        if self.extension and not self.extension.search(name):
+            return False
+        if self.path and not self.path.match(path):
+            return False
+        return True
+
 
 @dataclass
 class FileResult:
@@ -522,7 +569,7 @@ class GitLabClient:
         Returns:
             Tuple of (project, matching files)
         """
-        from .executor import matches_file_criteria
+        patterns = FileCriteriaPatterns.from_criteria(criteria)
 
         url = f"/projects/{project.id}/repository/tree?recursive=true&per_page=100&ref={ref}"
         try:
@@ -533,7 +580,7 @@ class GitLabClient:
         matching = [
             FileResult(path=f["path"], name=f["name"], type=f["type"])
             for f in all_files
-            if f["type"] == "blob" and matches_file_criteria(f, criteria)
+            if f["type"] == "blob" and patterns.matches(f["name"], f["path"])
         ]
 
         return project, matching
