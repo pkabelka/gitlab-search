@@ -321,89 +321,6 @@ async def execute_blob_search(
     return list(project_results.values())
 
 
-async def execute_file_search(
-    client: GitLabClient,
-    projects: list[Project],
-    expression: ExprNode,
-    all_queries: list[str],
-    filename: str | None = None,
-    extension: str | None = None,
-    path: str | None = None,
-) -> list[tuple[Project, list[FileResult]]]:
-    """Execute filename search with expression logic.
-
-    For file searches, the query is matched against the filename,
-    so expression logic is evaluated differently.
-
-    Args:
-        client: GitLab API client
-        projects: Projects to search in
-        expression: Expression tree for query logic
-        all_queries: All unique query strings in expression
-        filename: Optional filename filter
-        extension: Optional extension filter
-        path: Optional path filter
-
-    Returns:
-        List of (project, results) tuples matching the expression
-    """
-    if not all_queries:
-        # No query - just use filename/extension/path filters
-        criteria = SearchCriteria(
-            search_query="",
-            filename=filename,
-            extension=extension,
-            path=path,
-        )
-        return await client.search_filenames_in_projects(projects, criteria)
-
-    # Execute all queries in parallel
-    query_results: dict[str, dict[FileResultIdentifier, tuple[Project, FileResult]]] = {}
-
-    async def search_query(query: str) -> tuple[str, list[tuple[Project, list[FileResult]]]]:
-        criteria = SearchCriteria(
-            search_query=query,
-            filename=filename,
-            extension=extension,
-            path=path,
-        )
-        results = await client.search_filenames_in_projects(projects, criteria)
-        return query, results
-
-    query_tasks = [search_query(q) for q in all_queries]
-    query_results_list = await asyncio.gather(*query_tasks)
-
-    for query, results in query_results_list:
-        query_results[query] = {}
-        for project, file_results in results:
-            for result in file_results:
-                rid = FileResultIdentifier.from_result(project, result)
-                query_results[query][rid] = (project, result)
-
-    id_sets: dict[str, set[Any]] = {
-        q: set(results.keys()) for q, results in query_results.items()
-    }
-
-    universe: set[Any] = set()
-    for ids in id_sets.values():
-        universe |= ids
-
-    set_universe(expression, universe)
-    matching_ids = expression.evaluate(id_sets)
-
-    project_results: dict[int, tuple[Project, list[FileResult]]] = {}
-
-    for query, results in query_results.items():
-        for rid, (project, result) in results.items():
-            if rid in matching_ids:
-                if project.id not in project_results:
-                    project_results[project.id] = (project, [])
-                if result not in project_results[project.id][1]:
-                    project_results[project.id][1].append(result)
-
-    return list(project_results.values())
-
-
 async def execute_scope_search(
     client: GitLabClient,
     projects: list[Project],
@@ -529,25 +446,13 @@ async def execute_search(
             printer.print_blob_results(all_queries, results)
 
         elif scope == "files":
-            if expression:
-                results = await execute_file_search(
-                    client,
-                    projects,
-                    expression,
-                    all_queries,
-                    parsed.filename,
-                    parsed.extension,
-                    parsed.path,
-                )
-            else:
-                # File search without query uses filters only
-                criteria = SearchCriteria(
-                    search_query="",
-                    filename=parsed.filename,
-                    extension=parsed.extension,
-                    path=parsed.path,
-                )
-                results = await client.search_filenames_in_projects(projects, criteria)
+            criteria = SearchCriteria(
+                search_query="",
+                filename=parsed.filename,
+                extension=parsed.extension,
+                path=parsed.path,
+            )
+            results = await client.search_filenames_in_projects(projects, criteria)
             # Apply exclusion filtering
             if parsed.exclude_filenames or parsed.exclude_extensions or parsed.exclude_paths:
                 filtered_files: list[tuple[Project, list[FileResult]]] = []
