@@ -111,10 +111,13 @@ Examples:
   {PROGRAM_NAME} -p myproject \\( -q "a" -o -q "b" \\) -q "c"
 
   # Exclude markdown files from search
-  {PROGRAM_NAME} -p myproject -q "term" ! -e md
+  {PROGRAM_NAME} -q "term" ! -e md
 
   # Exclude test files and vendor directory
-  {PROGRAM_NAME} -p myproject -q "term" ! -f "*.test.*" ! -P "*vendor*"
+  {PROGRAM_NAME} -q "term" ! -f "*.test.*" ! -P "*vendor*"
+
+  # Search matching files (uses tree endpoint)
+  {PROGRAM_NAME} -s files -f "*test*" -P "routes/*"
 """)
 
 
