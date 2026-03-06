@@ -318,7 +318,7 @@ class GitLabClient:
         Returns:
             List of all descendant Group objects
         """
-        url = f"/groups/{group.id}/descendant_groups?per_page=100&all_available=true"
+        url = f"/groups/{quote(group.id, safe='')}/descendant_groups?per_page=100&all_available=true"
         try:
             data = await self._paginated_request(url)
             descendants = [Group(id=str(g["id"]), name=g["full_path"]) for g in data]
@@ -380,7 +380,7 @@ class GitLabClient:
             )
 
         async def fetch_group_projects(group: Group) -> list[dict]:
-            url = f"/groups/{group.id}/projects?per_page=100{self._get_archived_query_param(archived_filter)}"
+            url = f"/groups/{quote(group.id, safe='')}/projects?per_page=100{self._get_archived_query_param(archived_filter)}"
             return await self._paginated_request(url)
 
         # Fetch all group projects concurrently
